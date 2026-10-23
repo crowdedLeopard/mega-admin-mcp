@@ -117,10 +117,10 @@ securityDefinitions:
     authorizationUrl: https://login.microsoftonline.com/{settings.tenant_id or 'common'}/oauth2/v2.0/authorize
     tokenUrl: https://login.microsoftonline.com/{settings.tenant_id or 'common'}/oauth2/v2.0/token
     scopes:
-      api://{settings.client_id or '<client-id>'}/.default: Access Mega Admin MCP as the signed-in admin
+      {settings.client_id or '<client-id>'}/.default: Access Mega Admin MCP as the signed-in admin
 security:
   - oauth2-auth:
-      - api://{settings.client_id or '<client-id>'}/.default
+      - {settings.client_id or '<client-id>'}/.default
 """
     return PlainTextResponse(yaml_text, media_type="application/x-yaml")
 

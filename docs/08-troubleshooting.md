@@ -12,7 +12,9 @@ Start with `doctor`. Ask the agent to run it, or call it from any MCP client. It
 
 **AADSTS65001 or "need admin approval" at sign-in.** You are on the full tier (or added an admin-consent scope) and nobody has consented. A Global Administrator opens `https://login.microsoftonline.com/<tenant>/adminconsent?client_id=<client id>`, or runs the script with `-GrantAdminConsent`.
 
-**AADSTS500011 / invalid resource / wrong audience.** The scopes box in Copilot Studio must be exactly `api://<client id>/.default`. Delete the connection and the tool, and add again with the right value.
+**AADSTS90009 "Application is requesting a token for itself" at sign-in.** The scopes box contains `api://<client id>/.default`. Because the app is both client and resource, Entra insists on the GUID form: `<client id>/.default`. Delete the tool (and the custom connector it created) and run the wizard again with the right value.
+
+**AADSTS500011 / invalid resource / wrong audience.** The scopes box in Copilot Studio must be exactly `<client id>/.default`. Delete the connection and the tool, and add again with the right value.
 
 **Dynamic discovery or Dynamic OAuth types fail.** Entra does not support dynamic client registration. Use Manual.
 

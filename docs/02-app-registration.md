@@ -12,7 +12,9 @@ Because every downstream call is on-behalf-of you, the server can never do somet
 
 ## Why `.default` in the Copilot Studio scopes box
 
-The scopes field in the Copilot Studio wizard is `api://<client id>/.default`. The `.default` scope tells Entra "consent to everything statically configured on this app". That is how one sign-in consents to the API scope and all the downstream permissions in one go. If you type individual scopes there instead, the downstream exchange fails later with a consent error.
+The scopes field in the Copilot Studio wizard is `<client id>/.default`, the bare GUID followed by `/.default`. The `.default` scope tells Entra "consent to everything statically configured on this app". That is how one sign-in consents to the API scope and all the downstream permissions in one go. If you type individual scopes there instead, the downstream exchange fails later with a consent error.
+
+Why the GUID and not `api://<client id>/.default`: the same app is both the OAuth client and the resource, so it is requesting a token for itself. Entra only allows that when the resource is identified by its GUID; the URI form fails at sign-in with `AADSTS90009: Application is requesting a token for itself`. I found that out the hard way in my own tenant, so the setup script prints the GUID form.
 
 ## Tiers
 

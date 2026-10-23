@@ -32,7 +32,7 @@ securityDefinitions:
     authorizationUrl: https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/authorize
     tokenUrl: https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/token
     scopes:
-      api://<client-id>/.default: Access Mega Admin MCP as the signed-in admin
+      <client-id>/.default: Access Mega Admin MCP as the signed-in admin (GUID form; Entra rejects api:// when an app requests a token for itself, AADSTS90009)
 security:
   - oauth2-auth:
-      - api://<client-id>/.default
+      - <client-id>/.default

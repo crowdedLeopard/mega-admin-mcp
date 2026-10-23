@@ -133,7 +133,7 @@ def validate_bearer(token: str) -> Principal:
         raise AuthError("Token has expired", detail={"error": "token_expired"}) from e
     except jwt.InvalidAudienceError as e:
         raise AuthError(
-            "Token audience is not this API. In Copilot Studio set Scopes to api://<client-id>/.default",
+            "Token audience is not this API. In Copilot Studio set Scopes to <client-id>/.default (GUID form)",
             detail={"aud": unverified.get("aud"), "accepted": settings.accepted_audiences},
         ) from e
     except jwt.PyJWTError as e:

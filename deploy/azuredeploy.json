@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "6952814430115236390"
+      "templateHash": "6130493511808012377"
     }
   },
   "parameters": {
@@ -310,7 +310,7 @@
     },
     "nextSteps": {
       "type": "string",
-      "value": "[format('In Copilot Studio add an MCP tool with Server URL {0}/mcp, OAuth 2.0 Manual, scopes api://{1}/.default. Then add the wizard redirect URL to the app registration.', variables('publicBaseUrl'), parameters('clientId'))]"
+      "value": "[format('In Copilot Studio add an MCP tool with Server URL {0}/mcp, OAuth 2.0 Manual, scopes {1}/.default (GUID form, not api://). Then add the wizard redirect URL to the app registration.', variables('publicBaseUrl'), parameters('clientId'))]"
     }
   }
 }

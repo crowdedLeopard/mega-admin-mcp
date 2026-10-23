@@ -1,5 +1,5 @@
 {
-  "generated": "2026-10-23T20:46:59Z",
+  "generated": "2026-10-23T21:18:46Z",
   "builder_version": "1.0.0",
   "sources": {
     "graph": {
@@ -32,14 +32,9 @@
     "powerplatform": 220,
     "retailprices": 1
   },
-  "warnings": [
-    "azure: specification/managementgroups/resource-manager not found",
-    "azure: specification/managedidentity/resource-manager not found",
-    "azure: specification/aiagents/resource-manager not found",
-    "azure: specification/ai/resource-manager not found"
-  ],
-  "added": 79,
+  "warnings": [],
+  "added": 0,
   "removed": 0,
-  "duration_seconds": 110,
-  "previous_generated": "2026-10-23T20:38:42Z"
+  "duration_seconds": 94,
+  "previous_generated": "2026-10-23T20:46:59Z"
 }

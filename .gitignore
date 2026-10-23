@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+.env
+*.local.env
+.pytest_cache/
+.DS_Store
+deploy/*.zip
+.azure/
+*.pfx
+*.pem
+!src/megamcp/data/catalog.json.gz
+!src/megamcp/data/changelog.json
+!src/megamcp/data/catalog_meta.json

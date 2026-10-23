@@ -1,0 +1,316 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.47.16.16243",
+      "templateHash": "6952814430115236390"
+    }
+  },
+  "parameters": {
+    "appName": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 40,
+      "metadata": {
+        "description": "Globally unique App Service name, becomes https://<appName>.azurewebsites.net"
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region"
+      }
+    },
+    "sku": {
+      "type": "string",
+      "defaultValue": "B1",
+      "allowedValues": [
+        "F1",
+        "B1",
+        "B2",
+        "B3",
+        "P0v3",
+        "P1v3",
+        "P2v3",
+        "P1mv3",
+        "S1"
+      ],
+      "metadata": {
+        "description": "App Service plan SKU. B1 is enough for a team; use P0v3 or above for production. F1 is for a quick look only (no Always On, sleeps when idle)."
+      }
+    },
+    "authMode": {
+      "type": "string",
+      "defaultValue": "delegated",
+      "allowedValues": [
+        "delegated",
+        "apikey",
+        "none"
+      ],
+      "metadata": {
+        "description": "delegated (Copilot Studio OAuth, recommended) | apikey (server identity) | none (never on the internet)"
+      }
+    },
+    "tenantId": {
+      "type": "string",
+      "metadata": {
+        "description": "Entra tenant id"
+      }
+    },
+    "clientId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "App registration (client) id created by scripts/setup-entra.ps1"
+      }
+    },
+    "clientSecret": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "App registration client secret (leave empty when using the managed identity federated credential)"
+      }
+    },
+    "useManagedIdentityFederatedCredential": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Use the App Service managed identity as the federated credential of the app registration instead of a secret"
+      }
+    },
+    "apiKey": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "API key when authMode = apikey"
+      }
+    },
+    "readOnly": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Turn every write operation off"
+      }
+    },
+    "defaultSubscriptionId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Default Azure subscription id for FinOps tools (optional)"
+      }
+    },
+    "deployFromGitHub": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Deploy the code straight from the public GitHub repository (Oryx build). Set false when you deploy a zip or container yourself."
+      }
+    },
+    "repoUrl": {
+      "type": "string",
+      "defaultValue": "https://github.com/crowdedLeopard/mega-admin-mcp",
+      "metadata": {
+        "description": "GitHub repository URL to deploy from"
+      }
+    },
+    "branch": {
+      "type": "string",
+      "defaultValue": "main",
+      "metadata": {
+        "description": "Branch to deploy"
+      }
+    },
+    "pythonVersion": {
+      "type": "string",
+      "defaultValue": "3.13",
+      "metadata": {
+        "description": "Python runtime"
+      }
+    }
+  },
+  "variables": {
+    "publicBaseUrl": "[format('https://{0}.azurewebsites.net', parameters('appName'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2023-12-01",
+      "name": "[format('{0}-plan', parameters('appName'))]",
+      "location": "[parameters('location')]",
+      "kind": "linux",
+      "sku": {
+        "name": "[parameters('sku')]"
+      },
+      "properties": {
+        "reserved": true
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2023-12-01",
+      "name": "[parameters('appName')]",
+      "location": "[parameters('location')]",
+      "kind": "app,linux",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', format('{0}-plan', parameters('appName')))]",
+        "httpsOnly": true,
+        "clientAffinityEnabled": false,
+        "siteConfig": {
+          "linuxFxVersion": "[format('PYTHON|{0}', parameters('pythonVersion'))]",
+          "appCommandLine": "python run.py",
+          "alwaysOn": "[not(equals(parameters('sku'), 'F1'))]",
+          "ftpsState": "Disabled",
+          "minTlsVersion": "1.2",
+          "http20Enabled": true,
+          "healthCheckPath": "/health",
+          "httpLoggingEnabled": true,
+          "detailedErrorLoggingEnabled": true,
+          "logsDirectorySizeLimit": 50,
+          "autoHealEnabled": true,
+          "autoHealRules": {
+            "triggers": {
+              "statusCodes": [
+                {
+                  "status": 500,
+                  "subStatus": 0,
+                  "count": 20,
+                  "timeInterval": "00:05:00"
+                }
+              ],
+              "slowRequests": {
+                "timeTaken": "00:02:00",
+                "count": 30,
+                "timeInterval": "00:05:00"
+              }
+            },
+            "actions": {
+              "actionType": "Recycle",
+              "minProcessExecutionTime": "00:02:00"
+            }
+          },
+          "appSettings": [
+            {
+              "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",
+              "value": "true"
+            },
+            {
+              "name": "ENABLE_ORYX_BUILD",
+              "value": "true"
+            },
+            {
+              "name": "WEBSITES_PORT",
+              "value": "8000"
+            },
+            {
+              "name": "PORT",
+              "value": "8000"
+            },
+            {
+              "name": "PYTHONDONTWRITEBYTECODE",
+              "value": "1"
+            },
+            {
+              "name": "AUTH_MODE",
+              "value": "[parameters('authMode')]"
+            },
+            {
+              "name": "TENANT_ID",
+              "value": "[parameters('tenantId')]"
+            },
+            {
+              "name": "CLIENT_ID",
+              "value": "[parameters('clientId')]"
+            },
+            {
+              "name": "CLIENT_SECRET",
+              "value": "[parameters('clientSecret')]"
+            },
+            {
+              "name": "USE_MANAGED_IDENTITY_FIC",
+              "value": "[string(parameters('useManagedIdentityFederatedCredential'))]"
+            },
+            {
+              "name": "MCP_API_KEY",
+              "value": "[parameters('apiKey')]"
+            },
+            {
+              "name": "READ_ONLY",
+              "value": "[string(parameters('readOnly'))]"
+            },
+            {
+              "name": "DEFAULT_SUBSCRIPTION_ID",
+              "value": "[parameters('defaultSubscriptionId')]"
+            },
+            {
+              "name": "PUBLIC_BASE_URL",
+              "value": "[variables('publicBaseUrl')]"
+            },
+            {
+              "name": "CATALOG_AUTO_REFRESH",
+              "value": "true"
+            },
+            {
+              "name": "CATALOG_REFRESH_HOURS",
+              "value": "24"
+            },
+            {
+              "name": "LOG_LEVEL",
+              "value": "INFO"
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', format('{0}-plan', parameters('appName')))]"
+      ]
+    },
+    {
+      "condition": "[parameters('deployFromGitHub')]",
+      "type": "Microsoft.Web/sites/sourcecontrols",
+      "apiVersion": "2023-12-01",
+      "name": "[format('{0}/{1}', parameters('appName'), 'web')]",
+      "properties": {
+        "repoUrl": "[parameters('repoUrl')]",
+        "branch": "[parameters('branch')]",
+        "isManualIntegration": true,
+        "deploymentRollbackEnabled": false,
+        "isMercurial": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', parameters('appName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "url": {
+      "type": "string",
+      "value": "[variables('publicBaseUrl')]"
+    },
+    "mcpEndpoint": {
+      "type": "string",
+      "value": "[format('{0}/mcp', variables('publicBaseUrl'))]"
+    },
+    "healthEndpoint": {
+      "type": "string",
+      "value": "[format('{0}/health', variables('publicBaseUrl'))]"
+    },
+    "connectorDefinition": {
+      "type": "string",
+      "value": "[format('{0}/connector.yaml', variables('publicBaseUrl'))]"
+    },
+    "managedIdentityPrincipalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Web/sites', parameters('appName')), '2023-12-01', 'full').identity.principalId]"
+    },
+    "nextSteps": {
+      "type": "string",
+      "value": "[format('In Copilot Studio add an MCP tool with Server URL {0}/mcp, OAuth 2.0 Manual, scopes api://{1}/.default. Then add the wizard redirect URL to the app registration.', variables('publicBaseUrl'), parameters('clientId'))]"
+    }
+  }
+}

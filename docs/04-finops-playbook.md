@@ -1,0 +1,78 @@
+# FinOps and tokenomics playbook
+
+FinOps is the reason this server exists. Admins are being asked "what are we spending on AI, where, and is it worth it" and the answer is spread across the Power Platform admin centre, the Microsoft 365 admin centre, Azure Cost Management, Azure Monitor and a pricing page. The `finops_*` tools pull those together into answers an agent can give in one turn. This page explains what each one does, where the numbers come from, and the prompts I use.
+
+## The three currencies you are managing
+
+| Currency | Where it is bought | Where it is consumed | Where the data is |
+| --- | --- | --- | --- |
+| Copilot Credits (entitlement `MCSMessages`) | Prepaid packs, prepurchase plans, pay-as-you-go billing plans linked to Azure subscriptions | Copilot Studio agents (all harnesses), Copilot Chat agents, agent flows, AI Builder when AI credits run out | Power Platform API licensing namespace; Azure Cost Management for the pay-as-you-go side |
+| Microsoft 365 Copilot licences | Per user per month | Nothing to meter, the waste is unused seats | Graph subscribedSkus and the Copilot usage report |
+| Azure OpenAI and Foundry tokens | Pay-as-you-go per million tokens, or PTU reservations | Every call your apps and agents make | Azure Monitor metrics per deployment; Azure Cost Management per meter; Azure Retail Prices for list price |
+
+## Copilot Credits
+
+**`finops_copilot_credits_overview`** is the headline. It reads the tenant currency report (purchased, allocated, consumed month to date for every currency) and the billing plans, and tells you whether any plan has the Copilot Studio meter enabled. Insights are plain sentences: "less than 5% of purchased credits are allocated", "no billing plan has the Copilot Studio meter enabled so environments cannot overflow to pay-as-you-go".
+
+Prompt: *"Give me the Copilot Credits position and tell me what you would change."*
+
+**`finops_environment_credits`** zooms into one environment: allocation, whether it draws from the tenant pool (the `TenantPool` enforcement rule), consumption against the allocation, the linked billing plan and any per-agent limits. Pass an environment name, id or URL.
+
+Prompt: *"How are Copilot Credits set up for the Contoso Production environment?"*
+
+**`finops_allocate_copilot_credits`** sets the allocation and the tenant pool rule. It shows what is available to allocate first and returns a preview; nothing changes until you confirm.
+
+Prompt: *"Allocate 250,000 credits to Contoso Production and stop it drawing from the tenant pool."*
+
+**`finops_agent_limits`** and **`finops_set_agent_limit`** are the Manage Agents page. The first lists every agent with month-to-date consumption, limit, notification threshold and hard stop. The second sets a monthly limit on one agent with a notification percentage and an optional hard stop.
+
+Prompt: *"Which agents have used the most credits this month and which have no limit?"* then *"Put a 20,000 credit monthly limit with an 80% alert on the top one."*
+
+**`finops_billing_plans`** joins the admin centre with the Azure bill. For each billing plan: status, region, linked environments, Azure subscription and resource group, which meters are enabled, and month-to-date cost from Cost Management split by meter (you will see "Pay As You Go Copilot Credit" as a meter when the credits meter is spinning).
+
+**`finops_link_environment_billing_plan`** links or unlinks an environment to a plan, with preview.
+
+**`finops_copilot_studio_consumption_report`** calls the Power Platform API that generates the downloadable consumption report (by environment, agent, product, feature, channel, model). In October 2026 Microsoft had not published the accepted report names and the endpoint returned 404 in my tenant for every name tried; the tool tells you that honestly and points at the alternatives. It will start working when Microsoft lights it up, because the catalog and the tool are already there.
+
+## Microsoft 365 Copilot licences
+
+**`finops_m365_copilot_licences`** lists every SKU with Copilot in the name (purchased, assigned, unassigned) and, if the app has `Reports.Read.All`, reads the Copilot usage report to count licensed users with no activity in N days. It multiplies that by a list price you can override to give a monthly waste figure. Unassigned seats are flagged separately.
+
+Prompt: *"How many Microsoft 365 Copilot licences are we wasting?"*
+
+## Azure OpenAI and Foundry
+
+**`finops_azure_ai_inventory`** uses Azure Resource Graph to find every Cognitive Services account (kind OpenAI or AIServices) across subscriptions, then lists deployments: model, version, SKU (GlobalStandard, DataZoneStandard, Standard, ProvisionedManaged), capacity, rate limits, who created it and when.
+
+**`finops_azure_ai_tokens`** reads Azure Monitor metrics `ProcessedPromptTokens`, `GeneratedTokens` and `TokenTransaction` split by deployment, daily or hourly, for the last N days.
+
+**`finops_azure_ai_cost`** runs a Cost Management query for a scope and timeframe, filtered to Cognitive Services accounts (or any resource type), grouped by resource and meter, and classifies meters as input, output, cached input, cache write, provisioned, images, audio or fine tuning.
+
+**`finops_tokenomics`** is the one to show your finance partner. For one account it joins tokens and cost over the same window and gives, per deployment:
+
+- input, output and total tokens, active days, output share
+- cost split into input, output, cached and cache write meters
+- effective price per million tokens: input (all prompt tokens, including cached, because that is what the metric counts), output, blended
+- how much of the input cost is coming through cache meters
+- daily run rate and a projected 30 day cost
+- the matching Azure retail list prices for the model in that region (global, data zone, regional) for comparison
+- recommendations in plain words: idle deployments holding capacity, low cache use on heavy input workloads, output heavy workloads, candidates for provisioned throughput
+
+How it attributes cost: Cost Management meters carry the model name in the meter name (for example `gpt 4o 1120 Inp glbl 1M Tokens`). The tool matches meter names to deployment model names. Anything it cannot attribute is listed under `unassigned_meters` and stays in the account total, so nothing disappears.
+
+Caveats I want you to know: Cost Management lags usage by up to 24 hours and can be re-rated until the invoice closes; token metrics are near real time. The tool uses yesterday as the end of the window for that reason. Cached tokens are counted in `ProcessedPromptTokens` but billed at the cached rate, which is why the effective input price can look very low on a workload with a stable system prompt.
+
+Prompt: *"Run tokenomics on our production Azure OpenAI account for the last 30 days and tell me where the money goes."*
+
+**`finops_azure_ai_quota`** shows tokens-per-minute quota, PTU limits, usage and headroom per region. **`finops_price_lookup`** returns list prices for a model, per direction and deployment type, in any currency. **`finops_create_budget`** puts an Azure budget with 80% actual and 100% forecast alerts on a subscription or resource group. **`finops_cost_alerts`** lists active cost alerts and budgets with current spend.
+
+## A monthly review in six prompts
+
+1. "Copilot Credits overview, then environment credits for every production environment that has an allocation."
+2. "Agent limits: top ten by consumption, and which have no limit."
+3. "Billing plans with month-to-date Azure cost."
+4. "Microsoft 365 Copilot licence waste at 30 days."
+5. "Azure AI inventory, then tokenomics for each account that had tokens this month."
+6. "Create a budget on the AI resource group at 110% of last month's cost with alerts to finops@contoso.com." (preview, then confirm)
+
+Every write comes back as a preview first. Read it, then say yes.

@@ -1,0 +1,96 @@
+name: Daily catalog update
+
+# Every day: rebuild the operation catalog from Microsoft's published API
+# descriptions, commit it, publish it as the "latest" release so every
+# deployed server picks it up within 24 hours, and open an issue when a
+# source misbehaves. This is the self-updating half of the design.
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      skip_beta:
+        description: "Skip Microsoft Graph beta (faster)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: catalog
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: pip install pyyaml
+
+      - name: Build catalog
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python scripts/build_catalog.py ${{ inputs.skip_beta && '--skip-beta' || '' }}
+          cat src/megamcp/data/catalog_meta.json
+
+      - name: Install server and run tests against the new catalog
+        run: |
+          pip install -e ".[dev]"
+          pytest -q
+
+      - name: Detect changes
+        id: diff
+        run: |
+          if git diff --quiet -- src/megamcp/data; then echo "changed=false" >> $GITHUB_OUTPUT; else echo "changed=true" >> $GITHUB_OUTPUT; fi
+          echo "generated=$(python -c "import json;print(json.load(open('src/megamcp/data/catalog_meta.json'))['generated'][:10])")" >> $GITHUB_OUTPUT
+          echo "added=$(python -c "import json;print(json.load(open('src/megamcp/data/catalog_meta.json'))['added'])")" >> $GITHUB_OUTPUT
+          echo "removed=$(python -c "import json;print(json.load(open('src/megamcp/data/catalog_meta.json'))['removed'])")" >> $GITHUB_OUTPUT
+          echo "total=$(python -c "import json;print(sum(json.load(open('src/megamcp/data/catalog_meta.json'))['by_service'].values()))")" >> $GITHUB_OUTPUT
+          echo "warnings=$(python -c "import json;print(len(json.load(open('src/megamcp/data/catalog_meta.json'))['warnings']))")" >> $GITHUB_OUTPUT
+
+      - name: Commit catalog
+        if: steps.diff.outputs.changed == 'true'
+        run: |
+          git config user.name "mega-admin-mcp bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/megamcp/data
+          git commit -m "catalog: ${{ steps.diff.outputs.generated }} (+${{ steps.diff.outputs.added }} -${{ steps.diff.outputs.removed }}, ${{ steps.diff.outputs.total }} operations)"
+          git push
+
+      - name: Publish release with catalog assets
+        if: steps.diff.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="catalog-${{ steps.diff.outputs.generated }}"
+          gh release delete "$TAG" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" src/megamcp/data/catalog.json.gz src/megamcp/data/changelog.json src/megamcp/data/catalog_meta.json \
+            --latest --title "Catalog ${{ steps.diff.outputs.generated }}" \
+            --notes "Automated daily catalog. ${{ steps.diff.outputs.total }} operations, +${{ steps.diff.outputs.added }} added, -${{ steps.diff.outputs.removed }} removed since the previous build. Deployed servers download this file automatically (CATALOG_URL)."
+
+      - name: Open an issue when a source misbehaved
+        if: steps.diff.outputs.warnings != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BODY=$(python -c "import json;print('\n'.join('- '+w for w in json.load(open('src/megamcp/data/catalog_meta.json'))['warnings']))")
+          EXISTING=$(gh issue list --label catalog-warning --state open --json number --jq '.[0].number')
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body "Build ${{ steps.diff.outputs.generated }} warnings:\n\n$BODY"
+          else
+            gh label create catalog-warning --color E99695 --description "Catalog build warnings" 2>/dev/null || true
+            gh issue create --title "Catalog build warnings ${{ steps.diff.outputs.generated }}" --label catalog-warning --body "The daily catalog build kept the previous snapshot for one or more sources:\n\n$BODY"
+          fi

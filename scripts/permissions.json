@@ -1,0 +1,54 @@
+{
+  "_comment": "Delegated permissions the app registration asks for, by tier. Names are resolved to ids at setup time from each API's service principal, so you can add any scope name here. 'core' needs no admin consent (the signing-in admin consents for themselves); 'full' adds the Microsoft Graph reporting and directory scopes that require a Global Administrator or Privileged Role Administrator to grant consent once.",
+  "resources": {
+    "Microsoft Graph": {
+      "appId": "00000003-0000-0000-c000-000000000000",
+      "core": ["openid", "profile", "offline_access", "User.Read", "User.ReadBasic.All", "Sites.Read.All", "Team.ReadBasic.All"],
+      "full": ["Reports.Read.All", "Directory.Read.All", "Directory.AccessAsUser.All", "Organization.Read.All", "Application.Read.All",
+               "Policy.Read.All", "AuditLog.Read.All", "RoleManagement.Read.Directory", "LicenseAssignment.ReadWrite.All", "User.Read.All",
+               "Group.Read.All", "ServiceHealth.Read.All", "ServiceMessage.Read.All", "CopilotSettings-LimitedMode.Read", "AgentIdentity.Read.All",
+               "DeviceManagementConfiguration.Read.All", "DeviceManagementManagedDevices.Read.All", "TeamSettings.Read.All", "Sites.FullControl.All"]
+    },
+    "Azure Service Management": {
+      "appId": "797f4846-ba00-4fd7-ba43-dac1f8f63013",
+      "core": ["user_impersonation"],
+      "full": []
+    },
+    "Dataverse": {
+      "appId": "00000007-0000-0000-c000-000000000000",
+      "core": ["user_impersonation"],
+      "full": []
+    },
+    "Power Platform API": {
+      "appId": "8578e004-a5c6-46e7-913e-12f58912df43",
+      "core": ["Licensing.BillingPolicies.Read", "Licensing.BillingPolicies.ReadWrite", "Licensing.Allocations.Read", "Licensing.Allocations.ReadWrite",
+               "Licensing.IsvContracts.Read", "EnvironmentManagement.Environments.Read", "EnvironmentManagement.Groups.Read", "EnvironmentManagement.Settings.Read",
+               "CopilotStudio.AdminActions.Invoke", "CopilotGovernance.Settings.Read", "CopilotGovernance.Features.Read", "Analytics.AdvisorRecommendations.Read",
+               "Connectivity.Connectors.Read", "Connectivity.Connections.Read", "Authorization.RoleAssignments.Read", "PowerApps.Apps.Read", "PowerAutomate.Flows.Read",
+               "PowerPages.Websites.Read", "ResourceQuery.Resources.Read", "AppManagement.ApplicationPackages.Read", "Security.Recommendations.Read",
+               "Governance.CrossTenantConnectionReports.Read"],
+      "full": ["EnvironmentManagement.Settings.ReadWrite", "EnvironmentManagement.Groups.ReadWrite", "Authorization.RoleAssignments.Write",
+               "CopilotGovernance.Settings.Write", "CopilotGovernance.Features.Execute", "Analytics.AdvisorActions.Execute", "PowerAutomate.Flows.Write"]
+    },
+    "Power BI Service": {
+      "appId": "00000009-0000-0000-c000-000000000000",
+      "core": ["Workspace.Read.All", "Capacity.Read.All", "Report.Read.All", "Dataset.Read.All", "Dashboard.Read.All"],
+      "full": ["Tenant.Read.All"]
+    },
+    "Microsoft Flow Service": {
+      "appId": "7df0a125-d3be-4c96-aa54-591f83ff541c",
+      "core": ["Flows.Read.All", "Activity.Read.All"],
+      "full": ["Flows.Manage.All"]
+    },
+    "PowerApps Service": {
+      "appId": "475226c6-020e-4fb2-8a90-7a972cbfc1d4",
+      "core": ["User"],
+      "full": []
+    },
+    "Office 365 Management APIs": {
+      "appId": "c5393580-f805-4401-95e8-94b7a6ef2fc2",
+      "core": [],
+      "full": ["ActivityFeed.Read", "ServiceHealth.Read"]
+    }
+  }
+}

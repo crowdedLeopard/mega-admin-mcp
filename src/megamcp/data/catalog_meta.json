@@ -1,0 +1,45 @@
+{
+  "generated": "2026-10-23T20:46:59Z",
+  "builder_version": "1.0.0",
+  "sources": {
+    "graph": {
+      "operations": 47845
+    },
+    "azure": {
+      "operations": 6195
+    },
+    "powerplatform": {
+      "operations": 220,
+      "sdk": "powerplatform-management 2.0.3578.333"
+    },
+    "fabric": {
+      "operations": 569
+    },
+    "curated": {
+      "operations": 79
+    }
+  },
+  "by_service": {
+    "arm": 6195,
+    "bap": 10,
+    "dataverse": 35,
+    "fabric": 569,
+    "flow": 7,
+    "graph": 47845,
+    "o365mgmt": 4,
+    "powerapps": 7,
+    "powerbi": 15,
+    "powerplatform": 220,
+    "retailprices": 1
+  },
+  "warnings": [
+    "azure: specification/managementgroups/resource-manager not found",
+    "azure: specification/managedidentity/resource-manager not found",
+    "azure: specification/aiagents/resource-manager not found",
+    "azure: specification/ai/resource-manager not found"
+  ],
+  "added": 79,
+  "removed": 0,
+  "duration_seconds": 110,
+  "previous_generated": "2026-10-23T20:38:42Z"
+}

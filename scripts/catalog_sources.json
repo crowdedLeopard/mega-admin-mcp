@@ -1,0 +1,37 @@
+{
+  "graph": {
+    "specs": {
+      "v1.0": "https://raw.githubusercontent.com/microsoftgraph/msgraph-metadata/master/openapi/v1.0/openapi.yaml",
+      "beta": "https://raw.githubusercontent.com/microsoftgraph/msgraph-metadata/master/openapi/beta/openapi.yaml"
+    },
+    "permissions": "https://raw.githubusercontent.com/microsoftgraph/microsoft-graph-devx-content/dev/permissions/new/permissions.json"
+  },
+  "azure": {
+    "repo": "Azure/azure-rest-api-specs",
+    "branch": "main",
+    "services": [
+      "cognitiveservices", "cost-management", "consumption", "billing", "monitor", "resources", "authorization", "quota",
+      "resourcegraph", "powerplatform", "machinelearningservices", "apimanagement", "web", "subscription", "advisor",
+      "security", "operationalinsights", "applicationinsights", "app", "keyvault", "storage", "compute", "network",
+      "reservations", "botservice", "search", "policyinsights", "purview", "logic", "containerregistry",
+      "containerservice", "sql", "cosmos-db", "eventhub", "servicebus", "automation", "msi", "portal",
+      "resourcehealth", "support"
+    ],
+    "max_services_per_rp": 12
+  },
+  "powerplatform": {
+    "pypi_package": "powerplatform-management",
+    "api_version": "2024-10-01",
+    "docs_base": "https://learn.microsoft.com/rest/api/power-platform/"
+  },
+  "fabric": {
+    "repo": "microsoft/fabric-rest-api-specs",
+    "branch": "main",
+    "folders": [
+      "admin", "platform", "monitoring", "dataPipeline", "dataflow", "lakehouse", "warehouse", "notebook", "report",
+      "semanticModel", "dashboard", "paginatedReport", "eventhouse", "eventstream", "kqlDatabase", "kqlQueryset",
+      "mlModel", "mlExperiment", "spark", "sparkjobdefinition", "environment", "dataAgent", "sqlDatabase", "mirroredDatabase",
+      "variableLibrary", "userDataFunction", "orgApp", "graphQLApi", "copyJob", "reflex", "realTimeIntelligence", "plan"
+    ]
+  }
+}

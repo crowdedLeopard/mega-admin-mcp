@@ -44,6 +44,10 @@ Start with `doctor`. Ask the agent to run it, or call it from any MCP client. It
 
 ## Hosting
 
+**Deployment fails with `InternalSubscriptionIsOverQuotaForSku` (Current Limit (B1 VMs): 0).** The subscription has no App Service quota for that SKU in that region. This is common on sponsored, internal and trial subscriptions. Pick another region (`-p location=westeurope`) or SKU (`sku=P0v3`, `sku=S1`), or request quota. The App Service plan does not have to be in the resource group's region. Validate first with `az deployment group validate` using the same parameters; it reports the quota problem without creating anything.
+
+**`az webapp deploy` reports HTTP 504 GatewayTimeout after several minutes.** On B1 the first Oryx build (pip install) takes six to eight minutes and Kudu's HTTP gateway gives up before it finishes. The build usually completes anyway: check with `az webapp log deployment show -n <app> -g <rg>` and look for "Deployment successful", then open `/ready`. Use `--async true` with `az webapp deploy` to avoid the timeout, or deploy from GitHub (the template's `deployFromGitHub=true`), which builds asynchronously.
+
 **App Service shows "Application Error" after deployment.** Check Log stream. The usual causes are a missing setting in delegated mode (`TENANT_ID`, `CLIENT_ID`, `CLIENT_SECRET`) or a build that did not install requirements (`SCM_DO_BUILD_DURING_DEPLOYMENT=true` must be set before you deploy code).
 
 **Slow first call after idle.** Always On is enabled on B1 and above in the template. On Free or Shared tiers the app sleeps; do not use them.

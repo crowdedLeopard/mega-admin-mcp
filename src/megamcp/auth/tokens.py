@@ -140,19 +140,23 @@ class TokenBroker:
                 "correlation_id": result.get("correlation_id"),
                 "scope": scope,
             }
-            if "AADSTS65001" in desc or err in ("invalid_grant", "interaction_required"):
+            consent_problem = "AADSTS65001" in desc or result.get("suberror") == "consent_required"
+            if consent_problem:
                 detail["fix"] = (
-                    "The app registration has not been consented for this API. Grant admin consent "
-                    "(Entra admin centre > App registrations > API permissions > Grant admin consent) or open the consent URL."
+                    "The signed-in admin (or the tenant) has not consented to this app for this API yet. Consent happens when the admin "
+                    "signs in to the Copilot Studio connection with scopes api://<client-id>/.default. If the tier includes admin-only scopes, "
+                    "a Global Administrator must grant admin consent once (Entra admin centre > App registrations > API permissions, or the URL below)."
                 )
                 detail["admin_consent_url"] = (
                     f"https://login.microsoftonline.com/{settings.tenant_id}/adminconsent?client_id={settings.client_id}"
                 )
-            if "AADSTS50013" in desc or "AADSTS500131" in desc:
+            elif "AADSTS50013" in desc or "AADSTS500131" in desc:
                 detail["fix"] = "The incoming token audience is wrong. Scopes in Copilot Studio must be api://<client-id>/.default."
-            if result.get("claims"):
-                detail["claims_challenge"] = result["claims"]
+            elif result.get("claims") or err == "interaction_required":
+                detail["claims_challenge"] = result.get("claims")
                 detail["fix"] = "Conditional Access requires the admin to re-authenticate. Ask them to sign in again in Copilot Studio."
+            elif err == "invalid_grant":
+                detail["fix"] = "The incoming token could not be exchanged. Ask the admin to sign out of the Copilot Studio connection and sign in again."
             raise TokenError(f"On-behalf-of exchange failed for {scope}", detail)
         return result["access_token"], time.time() + int(result.get("expires_in", 3600))
 

@@ -42,6 +42,8 @@ az deployment group create -g rg-mega-admin-mcp -f deploy/bicep/main.bicep `
   -p appName=<unique name> tenantId=<tenant id> clientId=<client id> clientSecret=<secret> defaultSubscriptionId=<sub id>
 ```
 
+Two things I hit in my own tenant that you might too. If validation fails with `InternalSubscriptionIsOverQuotaForSku`, the subscription has no quota for that SKU in that region; choose another region or SKU (the plan can live in a different region from the resource group). And the first build on a B1 plan takes six to eight minutes; if a command line deploy reports a gateway timeout, the build is usually still finishing, so check the deployment log before you redeploy.
+
 Either way, when it finishes open `https://<app name>.azurewebsites.net/ready`. You want `"status": "ready"` and a catalog count in the tens of thousands. If `/ready` says degraded it tells you which setting is missing.
 
 Option C is a container: `ghcr.io/crowdedleopard/mega-admin-mcp:latest`, same environment variables, port 8000. Container Apps, AKS or anything else that can run a container works; the server is stateless.

@@ -66,8 +66,13 @@ def register(mcp: MCPServer) -> None:
         targets = [(k, v.scope) for k, v in SERVICES.items() if v.scope]
         if dataverse_org_url:
             targets.append(("dataverse", dataverse_org_url.rstrip("/") + "/.default"))
-        checks = await asyncio.gather(*(check(n, s) for n, s in targets))
-        ok_count = sum(1 for c in checks if c["status"] == "ok")
+        checks = list(await asyncio.gather(*(check(n, s) for n, s in targets)))
+        # Office 365 Management (application permissions only) and Azure DevOps are optional extras, not core
+        optional = {"o365mgmt", "devops"}
+        for c in checks:
+            if c["service"] in optional and c["status"] != "ok":
+                c["status"] = "not consented (optional)"
+        ok_count = sum(1 for c in checks if c["status"] == "ok" or c["service"] in optional)
 
         live: list[dict[str, Any]] = []
         for svc, path in (("graph", "/v1.0/me" if p.mode == "delegated" or settings.auth_mode == "none" else "/v1.0/organization"),
@@ -230,10 +235,13 @@ def _advice(problems: list[str], checks: list[dict[str, Any]], live: list[dict[s
     advice: list[str] = []
     if problems:
         advice.append("Fix the configuration problems first (environment variables on the host).")
-    failed = [c for c in checks if c["status"] != "ok"]
+    failed = [c for c in checks if c["status"] == "failed"]
     for c in failed:
         fix = c.get("fix")
         advice.append(f"{c['service']}: {c.get('message', 'token failed')}" + (f" Fix: {fix}" if fix else ""))
+    skipped = [c["service"] for c in checks if str(c["status"]).startswith("not consented")]
+    if skipped:
+        advice.append(f"Optional services without consent (fine unless you need them): {', '.join(skipped)}. Add their scopes to scripts/permissions.json and re-run setup-entra.ps1 if you do.")
     for l in live:
         if not l.get("ok"):
             advice.append(f"{l['service']} {l['path']} returned {l['status']}: {l.get('message', '')} {' '.join(l.get('hints', []))}".strip())

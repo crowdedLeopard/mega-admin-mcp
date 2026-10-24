@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import datetime as dt
 import re
+import time
 from collections import defaultdict
 from typing import Annotated, Any
 from urllib.parse import quote
@@ -17,6 +18,7 @@ from mcp.server.mcpserver import MCPServer
 from pydantic import Field
 
 from ..config import settings
+from ..runbook import budget
 from ..runbook.invoke import RunbookError, runbook
 from .admin import resolve_environment
 from .common import READ, WRITE, err
@@ -162,6 +164,185 @@ def _meter_matches_model(meter: str, model_name: str) -> int:
         if re.search(rf"(?<![a-z0-9]){re.escape(t)}(?![a-z0-9])", m):
             score += 1
     return score if score == len(toks) or (score >= 2 and score >= len(toks) - 1) else 0
+
+
+TOKENOMICS_METHOD = ("Tokens from Azure Monitor (ProcessedPromptTokens, GeneratedTokens, TokenTransaction split by ModelDeploymentName). "
+                     "Cost from Cost Management actual cost per meter, attributed to deployments by model name. Effective price = cost / tokens.")
+
+# Retail prices change rarely and prices.azure.com throttles hard (Retry-After 60 s), so
+# results are cached for twelve hours and at most two lookups run at a time.
+_PRICE_TTL_SECONDS = 12 * 3600
+_price_cache: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
+_price_sem: asyncio.Semaphore | None = None
+
+
+def _price_item(it: dict[str, Any], model_query: str = "") -> dict[str, Any]:
+    unit = str(it.get("unitOfMeasure") or "")
+    mult = 1000 if unit.strip().startswith("1K") else (1 if unit.strip().startswith("1M") else None)
+    sku = str(it.get("skuName") or "")
+    return {"model_query": model_query or None, "sku": it.get("skuName"), "meter": it.get("meterName"), "product": it.get("productName"), "region": it.get("armRegionName"),
+            "unit": unit, "retail_price": it.get("retailPrice"), "currency": it.get("currencyCode"),
+            "price_per_1M": round(float(it.get("retailPrice") or 0) * mult, 4) if mult else None, "category": _classify_meter(it.get("meterName") or ""),
+            "deployment_type": "global" if re.search(r"glbl|global|\bgl\b", sku, re.I) else ("data zone" if re.search(r"data zone|\bdz\b", sku, re.I) else "regional"),
+            "type": it.get("type"), "effective_from": it.get("effectiveStartDate")}
+
+
+async def _retail_prices(flt: str, currency: str = "USD", retry_wait_budget: float = 8.0) -> tuple[list[dict[str, Any]], str]:
+    """Items from the Azure Retail Prices API for a $filter, cached. Returns (items, error)."""
+    global _price_sem
+    key = (flt, currency or "USD")
+    hit = _price_cache.get(key)
+    if hit and time.time() - hit[0] < _PRICE_TTL_SECONDS:
+        return hit[1], ""
+    if _price_sem is None:
+        _price_sem = asyncio.Semaphore(2)
+    async with _price_sem:
+        hit = _price_cache.get(key)  # another caller may have filled it while we waited
+        if hit and time.time() - hit[0] < _PRICE_TTL_SECONDS:
+            return hit[1], ""
+        r = await runbook.call("retailprices", "GET", "/api/retail/prices", query={"$filter": flt, "currencyCode": currency or "USD", "api-version": "2023-01-01-preview"},
+                               max_chars=3_000_000, retry_wait_budget=retry_wait_budget)
+    if not r.get("ok"):
+        if hit:  # stale is better than nothing
+            return hit[1], f"using cached prices; refresh failed: {r.get('message')}"
+        return [], str(r.get("message") or f"HTTP {r.get('status')}")
+    items = list((r.get("body") or {}).get("Items", []))
+    _price_cache[key] = (time.time(), items)
+    return items, ""
+
+
+def _price_filter(model_text: str, region: str = "", sep: str = " ") -> str:
+    toks = _model_tokens(model_text)
+    flt = f"contains(productName,'Azure OpenAI') and contains(skuName,'{sep.join(toks[:2])}')"
+    if region:
+        flt += f" and armRegionName eq '{region}'"
+    return flt
+
+
+async def _list_prices_for(pairs: list[tuple[str, str]]) -> tuple[list[dict[str, Any]], str]:
+    """Best-effort list prices for (model, region) pairs; never raises, never waits long."""
+    out: list[dict[str, Any]] = []
+    notes: list[str] = []
+
+    async def one(model: str, region: str) -> None:
+        toks = _model_tokens(model)
+        if not toks:
+            return
+        items, error = await _retail_prices(_price_filter(model, region))
+        if not items and not error and len(toks) >= 2:  # sku names use spaces or hyphens inconsistently
+            items, error = await _retail_prices(_price_filter(model, region, sep="-"))
+        if error:
+            notes.append(f"{model}: {error[:160]}")
+        elif not items:
+            notes.append(f"{model}: no retail price lines match (try finops_price_lookup with a shorter model name)")
+        out.extend(_price_item(it, model) for it in items[:60])
+
+    await asyncio.gather(*(one(m, r) for m, r in pairs), return_exceptions=True)
+    return out, "; ".join(notes)
+
+
+def _account_analysis(resource_id: str, region: str, days: int, tokens_r: Any, deps_r: Any, cost_rows: list[dict[str, Any]], currency: str) -> dict[str, Any]:
+    """Join token metrics, deployments and cost rows for one account into the tokenomics view."""
+    errors: list[str] = []
+    deployments: dict[str, dict[str, Any]] = {}
+    if isinstance(deps_r, dict) and deps_r.get("ok"):
+        for dep in (deps_r.get("body") or {}).get("value", []):
+            props = dep.get("properties") or {}
+            deployments[dep.get("name")] = {"model": (props.get("model") or {}).get("name"), "version": (props.get("model") or {}).get("version"),
+                                            "sku": (dep.get("sku") or {}).get("name"), "capacity": (dep.get("sku") or {}).get("capacity")}
+    elif isinstance(deps_r, dict):
+        errors.append(f"deployments: {deps_r.get('message')}")
+    elif deps_r is not None:
+        errors.append(f"deployments: {str(deps_r)[:200]}")
+
+    per_dep: dict[str, dict[str, float]] = defaultdict(lambda: {"input": 0, "output": 0, "total": 0, "active_days": 0})
+    label = {"ProcessedPromptTokens": "input", "GeneratedTokens": "output", "TokenTransaction": "total"}
+    if isinstance(tokens_r, dict) and tokens_r.get("ok"):
+        for metric in (tokens_r.get("body") or {}).get("value", []):
+            key = label.get((metric.get("name") or {}).get("value"), "other")
+            for ts in metric.get("timeseries", []):
+                dep = next((mv.get("value") for mv in ts.get("metadatavalues", []) if (mv.get("name") or {}).get("value", "").lower() == "modeldeploymentname"), "(all)")
+                for point in ts.get("data", []):
+                    v = int(point.get("total") or 0)
+                    per_dep[dep][key] += v
+                    if key == "total" and v:
+                        per_dep[dep]["active_days"] += 1
+    elif isinstance(tokens_r, dict):
+        errors.append(f"metrics: {tokens_r.get('message')}")
+    elif tokens_r is not None:
+        errors.append(f"metrics: {str(tokens_r)[:200]}")
+    for dep_name in deployments:  # deployments with no traffic still appear (idle capacity)
+        per_dep.setdefault(dep_name, {"input": 0, "output": 0, "total": 0, "active_days": 0})
+
+    meter_rows: list[dict[str, Any]] = []
+    dep_cost: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    unassigned: dict[str, float] = defaultdict(float)
+    for r in cost_rows:
+        meter = r.get("Meter") or ""
+        cost = float(r.get("Cost") or 0)
+        cat = _classify_meter(meter)
+        best, best_score = None, 0
+        for dep_name, info in deployments.items():
+            sc = max(_meter_matches_model(meter, info.get("model") or ""), _meter_matches_model(meter, dep_name))
+            if sc > best_score:
+                best, best_score = dep_name, sc
+        if best is None:
+            for dep_name in per_dep:
+                sc = _meter_matches_model(meter, dep_name)
+                if sc > best_score:
+                    best, best_score = dep_name, sc
+        meter_rows.append({"meter": meter, "sub_category": r.get("MeterSubCategory"), "category": cat, "cost": round(cost, 6), "deployment": best})
+        if best:
+            dep_cost[best][cat] += cost
+            dep_cost[best]["total"] += cost
+        else:
+            unassigned[meter] += cost
+
+    results: list[dict[str, Any]] = []
+    grand_cost = sum(float(r.get("Cost") or 0) for r in cost_rows)
+    grand_tokens = sum(v["total"] for v in per_dep.values())
+    for dep, t in sorted(per_dep.items(), key=lambda kv: -kv[1]["total"]):
+        c = dep_cost.get(dep, {})
+        inp_cost = c.get("input", 0) + c.get("batch_input", 0)
+        out_cost = c.get("output", 0) + c.get("batch_output", 0)
+        cached_cost = c.get("cached_input", 0) + c.get("cache_write", 0)
+        total_cost = c.get("total", 0)
+        all_input_cost = inp_cost + cached_cost  # ProcessedPromptTokens counts cached and uncached prompt tokens together
+        eff_in = round(all_input_cost / (t["input"] / 1e6), 4) if t["input"] and all_input_cost else None
+        eff_out = round(out_cost / (t["output"] / 1e6), 4) if t["output"] and out_cost else None
+        eff_blended = round(total_cost / (t["total"] / 1e6), 4) if t["total"] and total_cost else None
+        info = deployments.get(dep, {})
+        results.append({
+            "deployment": dep, "model": info.get("model"), "version": info.get("version"), "sku": info.get("sku"), "capacity": info.get("capacity"),
+            "input_tokens": int(t["input"]), "output_tokens": int(t["output"]), "total_tokens": int(t["total"]), "active_days": int(t["active_days"]),
+            "output_share_pct": _pct(t["output"], t["total"]), "share_of_account_tokens_pct": _pct(t["total"], grand_tokens),
+            "cost": {"currency": currency, "input": round(inp_cost, 4), "output": round(out_cost, 4), "cached_and_cache_write": round(cached_cost, 4),
+                     "other": round(total_cost - inp_cost - out_cost - cached_cost, 4), "total": round(total_cost, 4), "share_of_account_cost_pct": _pct(total_cost, grand_cost)},
+            "effective_price_per_1M_tokens": {"input_all_prompt_tokens": eff_in, "output": eff_out, "blended": eff_blended},
+            "cached_input_cost_share_pct": _pct(cached_cost, total_cost) if total_cost else None,
+            "cache_meter_share_of_input_cost_pct": _pct(cached_cost, all_input_cost) if all_input_cost else None,
+            "daily_run_rate": {"tokens": round(t["total"] / days), "cost": round(total_cost / days, 4)},
+            "projected_30_day_cost": round(total_cost / days * 30, 2),
+        })
+
+    recommendations: list[str] = []
+    for r_ in results:
+        if r_["total_tokens"] == 0 and r_.get("capacity"):
+            recommendations.append(f"{r_['deployment']}: no tokens in {days} days but {r_['capacity']} {('PTU' if 'provisioned' in str(r_.get('sku')).lower() else 'K TPM')} reserved. Delete or shrink the deployment; quota and PTU commitments cost money or block others.")
+        if r_["cost"]["total"] and r_.get("cached_input_cost_share_pct") is not None and r_["cached_input_cost_share_pct"] < 5 and r_["input_tokens"] > 50_000_000:
+            recommendations.append(f"{r_['deployment']}: cached input is under 5% of cost on a heavy input workload. Stable system prompts and tool definitions at the start of the prompt unlock prompt caching (up to 50-90% off cached input).")
+        if r_["output_share_pct"] and r_["output_share_pct"] > 40:
+            recommendations.append(f"{r_['deployment']}: output is {r_['output_share_pct']}% of tokens; output tokens cost several times input. Tighten max_tokens and response formats.")
+        if r_["sku"] and "provisioned" not in str(r_["sku"]).lower() and r_["daily_run_rate"]["tokens"] > 50_000_000:
+            recommendations.append(f"{r_['deployment']}: sustained {r_['daily_run_rate']['tokens']:,} tokens/day on pay-as-you-go. Evaluate PTU (provisioned) or a Foundry commitment; compare using the effective blended price per 1M tokens.")
+    if unassigned:
+        recommendations.append("Some meters could not be attributed to a deployment by model name; see unassigned_meters. They are still in the account total.")
+
+    return {"totals": {"tokens": int(grand_tokens), "cost": round(grand_cost, 4), "currency": currency,
+                       "effective_price_per_1M_tokens_blended": round(grand_cost / (grand_tokens / 1e6), 4) if grand_tokens and grand_cost else None,
+                       "projected_30_day_cost": round(grand_cost / days * 30, 2)},
+            "deployments": results, "meters": meter_rows, "unassigned": {k: round(v, 4) for k, v in unassigned.items()},
+            "recommendations": recommendations, "errors": errors, "region": region, "resource_id": resource_id}
 
 
 # ---------------------------------------------------------------------------
@@ -550,7 +731,7 @@ def register(mcp: MCPServer) -> None:  # noqa: C901 (big but flat on purpose)
             await asyncio.gather(*(deployments(a) for a in ai_accounts[:40]))
         total_deps = sum(len(a.get("deployments", [])) for a in ai_accounts)
         return {"ok": True, "accounts_total": len(accounts), "ai_accounts": len(ai_accounts), "deployments_total": total_deps,
-                "accounts": accounts, "next_steps": ["finops_azure_ai_tokens <account resource id> for token volumes", "finops_tokenomics <account resource id> for cost per token"]}
+                "accounts": accounts, "next_steps": ["finops_tokenomics with subscription_id (resource_id empty) analyses every account in ONE call", "finops_azure_ai_tokens <account resource id> for daily token series of one account"]}
 
     @mcp.tool(structured_output=False, annotations=READ, description=(
         "Token consumption for an Azure OpenAI / Foundry account from Azure Monitor: prompt (input), completion (output) and total tokens per model "
@@ -644,155 +825,163 @@ def register(mcp: MCPServer) -> None:  # noqa: C901 (big but flat on purpose)
                 "total": round(total, 4), "resource_type": resource_type, "resources": resources, "daily": daily, "row_count": len(rows),
                 "note": "Cost Management data lags usage by up to 24 hours and may be re-rated until the invoice closes."}
 
+    # ---------------------------------------------------------------- tokenomics
     @mcp.tool(structured_output=False, annotations=READ, description=(
-        "TOKENOMICS for one Azure OpenAI / Foundry account: joins Azure Monitor token counts with Cost Management actual cost per meter over the window, "
-        "giving per deployment input/output/cached tokens, cost, effective price per million tokens, cache share, output ratio, daily run-rate and projected monthly spend, "
-        "plus matching Azure retail list prices for comparison and plain-English recommendations."))
+        "TOKENOMICS for Azure OpenAI / Foundry: joins Azure Monitor token counts with Cost Management actual cost per meter over the window, "
+        "giving per deployment input/output/cached tokens, cost, effective price per million tokens, cache share, output ratio, daily run-rate, "
+        "projected monthly spend, matching Azure retail list prices and plain-English recommendations. "
+        "Leave resource_id EMPTY to analyse every account in a subscription in ONE call (preferred: one Cost Management query, accounts ranked by cost). "
+        "Pass resource_id only for a single account. Never call this once per account in a loop."))
     async def finops_tokenomics(
-        resource_id: Annotated[str, Field(description="ARM resource id of the Azure OpenAI / AI Services account")],
+        resource_id: Annotated[str, Field(description="Optional ARM id of one Azure OpenAI / AI Services account. Empty = all accounts in the subscription")] = "",
+        subscription_id: Annotated[str, Field(description="Subscription id for the all-accounts mode (default DEFAULT_SUBSCRIPTION_ID, or the only subscription you can see)")] = "",
         days: Annotated[int, Field(description="Window in days (2-90)")] = 30,
+        top_accounts: Annotated[int, Field(description="All-accounts mode: analyse at most this many accounts, highest cost first (1-25)")] = 10,
     ) -> dict[str, Any]:
         days = max(2, min(int(days), 90))
         end_day = _today() - dt.timedelta(days=1)  # cost data for today is incomplete
         start_day = end_day - dt.timedelta(days=days - 1)
-        sub_match = re.search(r"^/subscriptions/([^/]+)", resource_id, re.IGNORECASE)
-        if not sub_match:
-            return err("resource_id must be a full ARM id starting with /subscriptions/<id>/...")
-        sub_scope = f"/subscriptions/{sub_match.group(1)}"
+        window = {"start": start_day.isoformat(), "end": end_day.isoformat(), "days": days}
+        timespan = f"{start_day.isoformat()}T00:00:00Z/{(end_day + dt.timedelta(days=1)).isoformat()}T00:00:00Z"
 
-        tokens_task = runbook.call("arm", "GET", f"{resource_id}/providers/Microsoft.Insights/metrics", api_version=ARM_API_METRICS,
-                                   query={"metricnames": "ProcessedPromptTokens,GeneratedTokens,TokenTransaction", "interval": "P1D",
-                                          "timespan": f"{start_day.isoformat()}T00:00:00Z/{(end_day + dt.timedelta(days=1)).isoformat()}T00:00:00Z",
-                                          "aggregation": "Total", "$filter": "ModelDeploymentName eq '*'"}, max_chars=5_000_000)
-        deps_task = runbook.call("arm", "GET", f"{resource_id}/deployments", api_version=ARM_API_COGNITIVE, max_chars=400_000)
-        account_task = runbook.call("arm", "GET", resource_id, api_version=ARM_API_COGNITIVE, max_chars=50_000)
-        cost_task = _cost_query(sub_scope, "Custom", start_day.isoformat(), end_day.isoformat(), ["Meter", "MeterSubCategory"],
-                                {"name": "ResourceId", "operator": "In", "values": [resource_id.lower()]})
-        tokens_r, deps_r, account_r, cost_q = await asyncio.gather(tokens_task, deps_task, account_task, cost_task, return_exceptions=True)
+        def metrics_call(rid: str):
+            return runbook.call("arm", "GET", f"{rid}/providers/Microsoft.Insights/metrics", api_version=ARM_API_METRICS,
+                                query={"metricnames": "ProcessedPromptTokens,GeneratedTokens,TokenTransaction", "interval": "P1D", "timespan": timespan,
+                                       "aggregation": "Total", "$filter": "ModelDeploymentName eq '*'"}, max_chars=5_000_000)
 
-        if isinstance(tokens_r, Exception) or not tokens_r.get("ok"):
-            return tokens_r.result if isinstance(tokens_r, RunbookError) else (tokens_r if isinstance(tokens_r, dict) else err(str(tokens_r)))
-        region = (account_r.get("body") or {}).get("location", "") if isinstance(account_r, dict) and account_r.get("ok") else ""
-        deployments = {}
-        if isinstance(deps_r, dict) and deps_r.get("ok"):
-            for dep in (deps_r.get("body") or {}).get("value", []):
-                props = dep.get("properties") or {}
-                deployments[dep.get("name")] = {"model": (props.get("model") or {}).get("name"), "version": (props.get("model") or {}).get("version"),
-                                                "sku": (dep.get("sku") or {}).get("name"), "capacity": (dep.get("sku") or {}).get("capacity")}
+        def deployments_call(rid: str):
+            return runbook.call("arm", "GET", f"{rid}/deployments", api_version=ARM_API_COGNITIVE, max_chars=400_000)
 
-        # tokens per deployment
-        per_dep: dict[str, dict[str, float]] = defaultdict(lambda: {"input": 0, "output": 0, "total": 0, "active_days": 0})
-        label = {"ProcessedPromptTokens": "input", "GeneratedTokens": "output", "TokenTransaction": "total"}
-        for metric in (tokens_r.get("body") or {}).get("value", []):
-            key = label.get((metric.get("name") or {}).get("value"), "other")
-            for ts in metric.get("timeseries", []):
-                dep = next((mv.get("value") for mv in ts.get("metadatavalues", []) if (mv.get("name") or {}).get("value", "").lower() == "modeldeploymentname"), "(all)")
-                for point in ts.get("data", []):
-                    v = int(point.get("total") or 0)
-                    per_dep[dep][key] += v
-                    if key == "total" and v:
-                        per_dep[dep]["active_days"] += 1
+        # ---------------------------------------------------------- one account
+        if resource_id.strip():
+            resource_id = resource_id.strip()
+            sub_match = re.search(r"^/subscriptions/([^/]+)", resource_id, re.IGNORECASE)
+            if not sub_match:
+                return err("resource_id must be a full ARM id starting with /subscriptions/<id>/...")
+            sub_scope = f"/subscriptions/{sub_match.group(1)}"
+            cost_task = _cost_query(sub_scope, "Custom", start_day.isoformat(), end_day.isoformat(), ["Meter", "MeterSubCategory"],
+                                    {"name": "ResourceId", "operator": "In", "values": [resource_id.lower()]})
+            account_task = runbook.call("arm", "GET", resource_id, api_version=ARM_API_COGNITIVE, max_chars=50_000)
+            tokens_r, deps_r, account_r, cost_q = await asyncio.gather(metrics_call(resource_id), deployments_call(resource_id), account_task, cost_task, return_exceptions=True)
+            if isinstance(tokens_r, Exception) or not tokens_r.get("ok"):
+                return tokens_r.result if isinstance(tokens_r, RunbookError) else (tokens_r if isinstance(tokens_r, dict) else err(str(tokens_r)))
+            region = (account_r.get("body") or {}).get("location", "") if isinstance(account_r, dict) and account_r.get("ok") else ""
+            cost_rows, currency = _rows(cost_q) if isinstance(cost_q, dict) else ([], "")
+            cost_error = cost_q.result.get("message") if isinstance(cost_q, RunbookError) else (str(cost_q) if isinstance(cost_q, Exception) else "")
+            a = _account_analysis(resource_id, region, days, tokens_r, deps_r, cost_rows, currency)
+            if not cost_rows and not cost_error:
+                a["recommendations"].append("No cost rows yet for this window. Cost Management lags by up to 24 hours; token metrics are near real time.")
+            models = sorted({(d.get("model") or "") for d in a["deployments"] if d.get("model")})
+            list_prices, price_note = await _list_prices_for([(m, region) for m in models[:6]])
+            return {"ok": True, "mode": "account", "resource_id": resource_id, "region": region, "window": window,
+                    "account_totals": a["totals"], "deployments": a["deployments"], "meters": a["meters"], "unassigned_meters": a["unassigned"],
+                    "cost_error": cost_error, "list_prices": list_prices, "list_price_note": price_note, "recommendations": a["recommendations"],
+                    "method": TOKENOMICS_METHOD}
 
-        # cost per meter -> deployment via model name matching
+        # ------------------------------------------------- every account in one subscription
+        s, help_ = await _scope_or_help(subscription_id)
+        if help_:
+            return help_
+        if not re.match(r"^/subscriptions/[^/]+$", s, re.IGNORECASE):
+            return err("subscription_id must be a subscription id (or set DEFAULT_SUBSCRIPTION_ID); pass resource_id for a single account instead.")
+        sub_id = s.split("/")[2]
+        top_accounts = max(1, min(int(top_accounts), 25))
+        arg_body = {"query": ("resources | where type =~ 'microsoft.cognitiveservices/accounts' "
+                              "| project id, name, location, resourceGroup, kind | order by name asc"),
+                    "subscriptions": [sub_id], "options": {"resultFormat": "objectArray", "$top": 1000}}
+        cost_task = _cost_query(s, "Custom", start_day.isoformat(), end_day.isoformat(), ["ResourceId", "Meter", "MeterSubCategory"],
+                                {"name": "ResourceType", "operator": "In", "values": ["microsoft.cognitiveservices/accounts"]})
+        arg_task = runbook.call("arm", "POST", "/providers/Microsoft.ResourceGraph/resources", body=arg_body, api_version=ARM_API_ARG, max_chars=2_000_000)
+        cost_q, arg_r = await asyncio.gather(cost_task, arg_task, return_exceptions=True)
         cost_rows, currency = _rows(cost_q) if isinstance(cost_q, dict) else ([], "")
         cost_error = cost_q.result.get("message") if isinstance(cost_q, RunbookError) else (str(cost_q) if isinstance(cost_q, Exception) else "")
-        meter_rows = []
-        dep_cost: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
-        unassigned: dict[str, float] = defaultdict(float)
+        accounts: dict[str, dict[str, Any]] = {}
+        inventory_error = ""
+        if isinstance(arg_r, dict) and arg_r.get("ok"):
+            for acc in (arg_r.get("body") or {}).get("data", []):
+                accounts[str(acc.get("id", "")).lower()] = acc
+        else:
+            inventory_error = arg_r.get("message", "") if isinstance(arg_r, dict) else str(arg_r)
+        cost_by_res: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for r in cost_rows:
-            meter = r.get("Meter") or ""
-            cost = float(r.get("Cost") or 0)
-            cat = _classify_meter(meter)
-            best, best_score = None, 0
-            for dep_name, info in deployments.items():
-                sc = max(_meter_matches_model(meter, info.get("model") or ""), _meter_matches_model(meter, dep_name))
-                if sc > best_score:
-                    best, best_score = dep_name, sc
-            if best is None:
-                for dep_name in per_dep:
-                    sc = _meter_matches_model(meter, dep_name)
-                    if sc > best_score:
-                        best, best_score = dep_name, sc
-            meter_rows.append({"meter": meter, "sub_category": r.get("MeterSubCategory"), "category": cat, "cost": round(cost, 6), "deployment": best})
-            if best:
-                dep_cost[best][cat] += cost
-                dep_cost[best]["total"] += cost
-            else:
-                unassigned[meter] += cost
+            cost_by_res[str(r.get("ResourceId") or "").lower()].append(r)
+        cost_total_by_res = {rid: sum(float(r.get("Cost") or 0) for r in rows) for rid, rows in cost_by_res.items()}
+        # Only OpenAI / AI Services accounts have token metrics and model deployments. Translator, Speech,
+        # Vision and the like still cost money, so they are listed separately rather than analysed.
+        model_kinds = ("openai", "aiservices")
+        model_accounts = {rid for rid, a in accounts.items() if str(a.get("kind") or "").lower() in model_kinds}
+        if accounts:
+            candidates = model_accounts | {rid for rid in cost_by_res if rid not in accounts}  # cost-only ids: deleted or inventory missed them
+        else:
+            candidates = set(cost_by_res)  # inventory failed: analyse whatever has cost
+        other_accounts = [{"name": accounts[rid].get("name"), "kind": accounts[rid].get("kind"), "resource_id": accounts[rid].get("id"), "cost": round(cost_total_by_res.get(rid, 0.0), 4)}
+                          for rid in accounts if rid not in model_accounts and cost_total_by_res.get(rid, 0.0)]
+        other_accounts.sort(key=lambda x: -x["cost"])
+        if not candidates and not other_accounts:
+            return {"ok": True, "mode": "subscription", "subscription_id": sub_id, "window": window, "accounts_found": 0, "accounts": [],
+                    "cost_error": cost_error, "inventory_error": inventory_error,
+                    "recommendations": ["No Azure OpenAI / AI Services accounts and no AI cost in this subscription for the window."]}
+        ranked = sorted(candidates, key=lambda rid: (-cost_total_by_res.get(rid, 0.0), rid))
+        chosen = ranked[:top_accounts]
+        sem = asyncio.Semaphore(6)
 
-        results = []
-        grand_cost = sum(float(r.get("Cost") or 0) for r in cost_rows)
-        grand_tokens = sum(v["total"] for v in per_dep.values())
-        for dep, t in sorted(per_dep.items(), key=lambda kv: -kv[1]["total"]):
-            c = dep_cost.get(dep, {})
-            inp_cost = c.get("input", 0) + c.get("batch_input", 0)
-            out_cost = c.get("output", 0) + c.get("batch_output", 0)
-            cached_cost = c.get("cached_input", 0) + c.get("cache_write", 0)
-            total_cost = c.get("total", 0)
-            # ProcessedPromptTokens counts cached and uncached prompt tokens together, so the honest input price includes cache meters
-            all_input_cost = inp_cost + cached_cost
-            eff_in = round(all_input_cost / (t["input"] / 1e6), 4) if t["input"] and all_input_cost else None
-            eff_out = round(out_cost / (t["output"] / 1e6), 4) if t["output"] and out_cost else None
-            eff_blended = round(total_cost / (t["total"] / 1e6), 4) if t["total"] and total_cost else None
-            info = deployments.get(dep, {})
-            results.append({
-                "deployment": dep, "model": info.get("model"), "version": info.get("version"), "sku": info.get("sku"), "capacity": info.get("capacity"),
-                "input_tokens": int(t["input"]), "output_tokens": int(t["output"]), "total_tokens": int(t["total"]), "active_days": int(t["active_days"]),
-                "output_share_pct": _pct(t["output"], t["total"]), "share_of_account_tokens_pct": _pct(t["total"], grand_tokens),
-                "cost": {"currency": currency, "input": round(inp_cost, 4), "output": round(out_cost, 4), "cached_and_cache_write": round(cached_cost, 4),
-                         "other": round(total_cost - inp_cost - out_cost - cached_cost, 4), "total": round(total_cost, 4), "share_of_account_cost_pct": _pct(total_cost, grand_cost)},
-                "effective_price_per_1M_tokens": {"input_all_prompt_tokens": eff_in, "output": eff_out, "blended": eff_blended},
-                "cached_input_cost_share_pct": _pct(cached_cost, total_cost) if total_cost else None,
-                "cache_meter_share_of_input_cost_pct": _pct(cached_cost, all_input_cost) if all_input_cost else None,
-                "daily_run_rate": {"tokens": round(t["total"] / days), "cost": round(total_cost / days, 4)},
-                "projected_30_day_cost": round(total_cost / days * 30, 2),
-            })
+        async def analyse(rid_lower: str) -> dict[str, Any]:
+            info = accounts.get(rid_lower) or {}
+            rid = info.get("id") or rid_lower
+            async with sem:
+                tokens_r, deps_r = await asyncio.gather(metrics_call(rid), deployments_call(rid), return_exceptions=True)
+            a = _account_analysis(rid, info.get("location", ""), days, tokens_r, deps_r, cost_by_res.get(rid_lower, []), currency)
+            return {"resource_id": rid, "name": info.get("name") or rid.split("/")[-1], "region": info.get("location", ""), "resource_group": info.get("resourceGroup", ""),
+                    "kind": info.get("kind", ""), "totals": a["totals"], "deployments": a["deployments"], "unassigned_meters": a["unassigned"],
+                    "errors": a["errors"], "recommendations": [f"{info.get('name') or rid.split('/')[-1]}: {x}" for x in a["recommendations"]]}
 
-        # list prices for comparison (best effort)
-        list_prices: list[dict[str, Any]] = []
-        price_note = ""
-        try:
-            models = sorted({(d.get("model") or "") for d in deployments.values() if d.get("model")})
-            for model in models[:6]:
-                toks = _model_tokens(model)
-                if not toks:
-                    continue
-                flt = f"contains(productName,'Azure OpenAI') and contains(skuName,'{' '.join(toks[:2])}')"
-                if region:
-                    flt += f" and armRegionName eq '{region}'"
-                pr = await runbook.call("retailprices", "GET", "/api/retail/prices", query={"$filter": flt, "api-version": "2023-01-01-preview"}, max_chars=2_000_000)
-                for item in (pr.get("body") or {}).get("Items", [])[:60]:
-                    unit = str(item.get("unitOfMeasure") or "")
-                    mult = 1000 if unit.strip().startswith("1K") else (1 if unit.strip().startswith("1M") else None)
-                    list_prices.append({"model_query": model, "sku": item.get("skuName"), "meter": item.get("meterName"), "region": item.get("armRegionName"),
-                                        "unit": unit, "retail_price": item.get("retailPrice"), "currency": item.get("currencyCode"),
-                                        "price_per_1M": round(float(item.get("retailPrice") or 0) * mult, 4) if mult else None, "category": _classify_meter(item.get("meterName") or ""),
-                                        "deployment_type": "global" if re.search(r"glbl|global|\bgl\b", str(item.get("skuName")), re.I) else ("data zone" if re.search(r"data zone|\bdz\b", str(item.get("skuName")), re.I) else "regional")})
-        except Exception as e:  # noqa: BLE001
-            price_note = f"list price lookup skipped: {e}"
+        tasks = {asyncio.ensure_future(analyse(rid)): rid for rid in chosen}
+        done, pending = await asyncio.wait(set(tasks), timeout=budget.fanout_timeout(80.0))
+        for t in pending:
+            t.cancel()
+        analysed: list[dict[str, Any]] = []
+        for t in done:
+            try:
+                analysed.append(t.result())
+            except Exception as e:  # noqa: BLE001
+                analysed.append({"resource_id": tasks[t], "name": tasks[t].split("/")[-1], "error": str(e)[:300], "totals": {"tokens": 0, "cost": round(cost_total_by_res.get(tasks[t], 0.0), 4)}})
+        analysed.sort(key=lambda x: (-(x.get("totals") or {}).get("cost", 0), -(x.get("totals") or {}).get("tokens", 0)))
+        skipped_for_time = [tasks[t].split("/")[-1] for t in pending]
+        not_analysed = len(ranked) - len(chosen)
 
+        grand_cost = sum(cost_total_by_res.values())
+        other_cost = sum(x["cost"] for x in other_accounts)
+        grand_tokens = sum(int((x.get("totals") or {}).get("tokens", 0)) for x in analysed)
+        analysed_cost = sum(float((x.get("totals") or {}).get("cost", 0)) for x in analysed)
         recommendations: list[str] = []
-        for r_ in results:
-            if r_["total_tokens"] == 0 and r_.get("capacity"):
-                recommendations.append(f"{r_['deployment']}: no tokens in {days} days but {r_['capacity']} {('PTU' if 'provisioned' in str(r_.get('sku')).lower() else 'K TPM')} reserved. Delete or shrink the deployment; quota and PTU commitments cost money or block others.")
-            if r_["cost"]["total"] and r_.get("cached_input_cost_share_pct") is not None and r_["cached_input_cost_share_pct"] < 5 and r_["input_tokens"] > 50_000_000:
-                recommendations.append(f"{r_['deployment']}: cached input is under 5% of cost on a heavy input workload. Stable system prompts and tool definitions at the start of the prompt unlock prompt caching (up to 50-90% off cached input).")
-            if r_["output_share_pct"] and r_["output_share_pct"] > 40:
-                recommendations.append(f"{r_['deployment']}: output is {r_['output_share_pct']}% of tokens; output tokens cost several times input. Tighten max_tokens and response formats.")
-            if r_["sku"] and "provisioned" not in str(r_["sku"]).lower() and r_["daily_run_rate"]["tokens"] > 50_000_000:
-                recommendations.append(f"{r_['deployment']}: sustained {r_['daily_run_rate']['tokens']:,} tokens/day on pay-as-you-go. Evaluate PTU (provisioned) or a Foundry commitment; compare using the effective blended price per 1M tokens.")
-        if unassigned:
-            recommendations.append("Some meters could not be attributed to a deployment by model name; see unassigned_meters. They are still in the account total.")
+        for x in analysed:
+            recommendations.extend(x.get("recommendations", []))
+        if other_accounts:
+            recommendations.append(f"{len(other_accounts)} Cognitive Services account(s) of other kinds ({', '.join(sorted({str(x['kind']) for x in other_accounts}))}) cost {round(other_cost, 2)} {currency} in the window; see other_cognitive_services. Use finops_azure_ai_cost for their meters.")
+        idle = [x["name"] for x in analysed if not (x.get("totals") or {}).get("tokens") and not (x.get("totals") or {}).get("cost") and x.get("deployments")]
+        if idle:
+            recommendations.append(f"{len(idle)} account(s) have deployments but no tokens and no cost in {days} days ({', '.join(idle[:8])}). Delete unused deployments to free quota.")
+        if not_analysed > 0:
+            recommendations.append(f"{not_analysed} further account(s) were not analysed (top_accounts={top_accounts}); the subscription totals still include their cost. Raise top_accounts or pass resource_id for one of them.")
+        if skipped_for_time:
+            recommendations.append(f"Ran out of time budget before analysing {', '.join(skipped_for_time[:8])}; call again with a smaller top_accounts or pass resource_id.")
         if not cost_rows and not cost_error:
-            recommendations.append("No cost rows yet for this window. Cost Management lags by up to 24 hours; token metrics are near real time.")
-
-        return {"ok": True, "resource_id": resource_id, "region": region, "window": {"start": start_day.isoformat(), "end": end_day.isoformat(), "days": days},
-                "account_totals": {"tokens": int(grand_tokens), "cost": round(grand_cost, 4), "currency": currency,
-                                   "effective_price_per_1M_tokens_blended": round(grand_cost / (grand_tokens / 1e6), 4) if grand_tokens and grand_cost else None,
-                                   "projected_30_day_cost": round(grand_cost / days * 30, 2)},
-                "deployments": results, "meters": meter_rows, "unassigned_meters": {k: round(v, 4) for k, v in unassigned.items()}, "cost_error": cost_error,
-                "list_prices": list_prices, "list_price_note": price_note, "recommendations": recommendations,
-                "method": "Tokens from Azure Monitor (ProcessedPromptTokens, GeneratedTokens, TokenTransaction split by ModelDeploymentName). Cost from Cost Management actual cost filtered to this resource, meters attributed to deployments by model name. Effective price = cost / tokens."}
+            recommendations.append("No AI cost rows in this window. Cost Management lags by up to 24 hours; token metrics are near real time.")
+        pairs: list[tuple[str, str]] = []
+        for x in analysed:
+            for d in x.get("deployments", []):
+                if d.get("model") and (d.get("model"), x.get("region", "")) not in pairs:
+                    pairs.append((d["model"], x.get("region", "")))
+        list_prices, price_note = await _list_prices_for(pairs[:6])
+        return {"ok": True, "mode": "subscription", "subscription_id": sub_id, "window": window, "currency": currency,
+                "subscription_totals": {"cognitive_services_cost": round(grand_cost, 4), "model_accounts_cost": round(grand_cost - other_cost, 4),
+                                        "other_cognitive_services_cost": round(other_cost, 4),
+                                        "cost_of_analysed_accounts": round(analysed_cost, 4), "tokens_of_analysed_accounts": int(grand_tokens),
+                                        "effective_price_per_1M_tokens_blended": round(analysed_cost / (grand_tokens / 1e6), 4) if grand_tokens and analysed_cost else None,
+                                        "projected_30_day_cost": round(grand_cost / days * 30, 2)},
+                "model_accounts_found": len(ranked), "accounts_analysed": len(analysed), "accounts_not_analysed": not_analysed, "skipped_for_time": skipped_for_time,
+                "accounts": analysed, "other_cognitive_services": other_accounts[:25], "cost_error": cost_error, "inventory_error": inventory_error,
+                "list_prices": list_prices, "list_price_note": price_note, "recommendations": recommendations, "method": TOKENOMICS_METHOD}
 
     @mcp.tool(structured_output=False, annotations=READ, description=(
         "Azure OpenAI quota and usage for a subscription and region: tokens-per-minute quota per model and deployment type, PTU limits, current usage and headroom."))
@@ -831,24 +1020,17 @@ def register(mcp: MCPServer) -> None:  # noqa: C901 (big but flat on purpose)
         toks = _model_tokens(model_text)
         if not toks:
             return err("model_text is required")
-        flt = f"contains(productName,'Azure OpenAI') and contains(skuName,'{' '.join(toks[:2])}')"
-        if region:
-            flt += f" and armRegionName eq '{region}'"
-        r = await runbook.call("retailprices", "GET", "/api/retail/prices", query={"$filter": flt, "currencyCode": currency, "api-version": "2023-01-01-preview"}, max_chars=3_000_000)
-        if not r.get("ok"):
-            return r
-        items = []
-        for it in (r.get("body") or {}).get("Items", []):
-            unit = str(it.get("unitOfMeasure") or "")
-            mult = 1000 if unit.strip().startswith("1K") else (1 if unit.strip().startswith("1M") else None)
-            items.append({"sku": it.get("skuName"), "meter": it.get("meterName"), "product": it.get("productName"), "region": it.get("armRegionName"), "unit": unit,
-                          "price": it.get("retailPrice"), "price_per_1M": round(float(it.get("retailPrice") or 0) * mult, 4) if mult else None,
-                          "currency": it.get("currencyCode"), "type": it.get("type"), "category": _classify_meter(it.get("meterName") or ""),
-                          "deployment_type": "global" if re.search(r"glbl|global|\bgl\b", str(it.get("skuName")), re.I) else ("data zone" if re.search(r"data zone|\bdz\b", str(it.get("skuName")), re.I) else "regional"),
-                          "effective_from": it.get("effectiveStartDate")})
+        flt = _price_filter(model_text, region)
+        raw, error = await _retail_prices(flt, currency, retry_wait_budget=20.0)
+        if error and not raw:
+            return err(f"Retail Prices API: {error}", filter=flt)
+        items = [_price_item(it) for it in raw]
+        for it in items:
+            it.pop("model_query", None)
         rank = {"input": 0, "cached_input": 1, "output": 2, "cache_write": 3, "batch_input": 4, "batch_output": 5, "provisioned": 6}
         items.sort(key=lambda x: (rank.get(x["category"], 9), x["deployment_type"], x["price_per_1M"] or 0))
         return {"ok": True, "query": model_text, "filter": flt, "count": len(items), "items": items[: max(1, min(int(limit), 200))],
+                "cache_note": error or None,
                 "note": "Retail prices are list prices in the requested currency; your agreement may differ. Global < Data Zone < Regional."}
 
     # ---------------------------------------------------------------- Microsoft 365 Copilot

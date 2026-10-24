@@ -18,7 +18,15 @@ Start with `doctor`. Ask the agent to run it, or call it from any MCP client. It
 
 **Dynamic discovery or Dynamic OAuth types fail.** Entra does not support dynamic client registration. Use Manual.
 
+**"A custom connector with display name '...' already exists" when you re-run the wizard.** Deleting the connector in Power Apps (or through the API Hub) is not enough: the wizard also wrote a `connectors` record in the environment's Dataverse. Delete that row too (Power Apps, Tables, Connector; or `invoke service=dataverse DELETE /connectors(<id>)`), or give the server a different name in the wizard.
+
+**The connection sign-in opens a popup that never completes, or the browser blocks it.** The consent flow is: Copilot Studio asks the environment's connectivity API for a consent link, that link goes to Entra, Entra returns to `global.consent.azure-apim.net`, and the API Hub shows a "Confirmation required" page (tick the box, Allow access) before it hands the connection back. If a popup blocker eats step one, open the agent's Tools page, pick the tool, and use the connection drop-down to sign in again from a normal tab. Once the connection shows Connected you do not need the popup again.
+
 ## Tool calls
+
+**`ConnectorTimeoutError: The connector ... has timed out after 120 seconds`.** Copilot Studio's hard limit per tool call. The server keeps calls inside `TOOL_TIME_BUDGET_SECONDS` (default 100): it stops honouring long `Retry-After` waits and returns `retry_after_seconds` instead, and fan-out tools return partial results with a note. If you still see it, the prompt made the orchestrator loop one tool over many resources; ask for the subscription-wide form (`finops_tokenomics` with `subscription_id` and no `resource_id`) or narrow the request. On a Free App Service plan the first call after idle can also take a minute to warm up; use B1 or above.
+
+**`retry_after_seconds` in a response.** The downstream service is rate limiting and waiting would have overrun the tool's time budget. Ask again after that many seconds. Cost Management (query processing units) and the Retail Prices API are the usual sources.
 
 **401 from a downstream service after the token was refreshed.** The app registration lacks a permission for that API, or the admin lacks the role. `describe_operation` shows the Graph permission. For the Power Platform API the error includes `InsufficientDelegatedPermissions` and the namespace; add the matching `Licensing.*`, `EnvironmentManagement.*` or `CopilotStudio.*` scope and re-consent.
 
@@ -30,7 +38,7 @@ Start with `doctor`. Ask the agent to run it, or call it from any MCP client. It
 
 **Azure 404 InvalidApiVersionParameter.** The server retries automatically with a supported version; if you still see it, pass `api_version` explicitly from `describe_operation`.
 
-**Cost Management 429 with a QPU header.** You are being rate limited on query processing units. The server backs off as instructed; spread cost queries out or use smaller date ranges.
+**Cost Management 429 with a QPU header.** You are being rate limited on query processing units. The server backs off as instructed while that fits the time budget; otherwise it returns `retry_after_seconds`. Spread cost queries out, use smaller date ranges, and prefer the one-call tools (subscription-wide tokenomics, billing plans) over per-resource loops.
 
 **Response truncated.** Use `$select` and `$top`, a shorter date range, or follow `next_link` with `invoke_url`.
 

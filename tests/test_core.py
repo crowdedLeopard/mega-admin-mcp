@@ -91,3 +91,42 @@ def test_tool_schemas_are_copilot_studio_safe():
             assert isinstance(prop.get("type"), str), f"{t.name}.{name} has non-primitive type"
             assert prop["type"] in ("string", "integer", "number", "boolean"), f"{t.name}.{name} is {prop['type']}"
         assert t.description and len(t.description) > 40, t.name
+
+
+def test_time_budget_caps_waits():
+    from megamcp.runbook import budget
+
+    assert budget.remaining() is None  # no budget outside a request
+    assert budget.can_wait(60)
+    tok = budget.start(20)
+    try:
+        rem = budget.remaining()
+        assert rem is not None and 19 <= rem <= 20
+        assert budget.can_wait(5)
+        assert not budget.can_wait(15)  # 15 + 8 s reserve > 20
+        assert 5 <= budget.http_timeout(90) <= 17
+        assert 5 <= budget.fanout_timeout(80) <= 8
+    finally:
+        budget.clear(tok)
+    assert budget.remaining() is None
+
+
+def test_retail_price_cache_and_filter():
+    from megamcp.tools import finops
+
+    assert finops._price_filter("gpt-4o", "swedencentral") == "contains(productName,'Azure OpenAI') and contains(skuName,'4o') and armRegionName eq 'swedencentral'"
+    item = finops._price_item({"skuName": "gpt-4o-0806-Inp-glbl", "meterName": "gpt 4o 0806 Inp glbl Tokens", "unitOfMeasure": "1K", "retailPrice": 0.0025, "currencyCode": "USD"}, "gpt-4o")
+    assert item["price_per_1M"] == 2.5 and item["category"] == "input" and item["deployment_type"] == "global"
+    finops._price_cache[("x", "USD")] = (finops.time.time(), [{"skuName": "cached"}])
+    items, error = asyncio.run(finops._retail_prices("x", "USD"))
+    assert items == [{"skuName": "cached"}] and error == ""
+
+
+def test_tokenomics_schema_has_subscription_mode():
+    server = create_server()
+    tools = asyncio.run(server.list_tools())
+    tok = next(t for t in tools if t.name == "finops_tokenomics")
+    schema = getattr(tok, "inputSchema", None) or getattr(tok, "input_schema", None)
+    props = schema["properties"]
+    assert "subscription_id" in props and "top_accounts" in props
+    assert "resource_id" not in schema.get("required", [])

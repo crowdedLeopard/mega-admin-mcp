@@ -93,6 +93,9 @@ class Settings:
     # --- behaviour --------------------------------------------------------
     request_timeout_seconds: int = field(default_factory=lambda: _int("REQUEST_TIMEOUT_SECONDS", 90))
     max_retries: int = field(default_factory=lambda: _int("MAX_RETRIES", 3))
+    # Copilot Studio cancels a tool call after 120 s; every MCP request gets this
+    # much time and the runbook caps retry waits and HTTP timeouts to what is left.
+    tool_time_budget_seconds: int = field(default_factory=lambda: _int("TOOL_TIME_BUDGET_SECONDS", 100))
     graph_auto_beta_fallback: bool = field(default_factory=lambda: _bool("GRAPH_AUTO_BETA_FALLBACK", True))
     arm_auto_api_version: bool = field(default_factory=lambda: _bool("ARM_AUTO_API_VERSION", True))
     default_subscription_id: str = field(default_factory=lambda: _env("DEFAULT_SUBSCRIPTION_ID"))

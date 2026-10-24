@@ -48,7 +48,7 @@ Prompt: *"How many Microsoft 365 Copilot licences are we wasting?"*
 
 **`finops_azure_ai_cost`** runs a Cost Management query for a scope and timeframe, filtered to Cognitive Services accounts (or any resource type), grouped by resource and meter, and classifies meters as input, output, cached input, cache write, provisioned, images, audio or fine tuning.
 
-**`finops_tokenomics`** is the one to show your finance partner. For one account it joins tokens and cost over the same window and gives, per deployment:
+**`finops_tokenomics`** is the one to show your finance partner. It has two modes. Leave `resource_id` empty and it analyses **every OpenAI and AI Services account in a subscription in one call**: one Cost Management query for the subscription, token metrics and deployments for the top accounts by cost in parallel, other Cognitive Services kinds (Translator, Speech, Vision) listed with their cost but not analysed. Pass `resource_id` and it goes deep on one account. Both join tokens and cost over the same window and give, per deployment:
 
 - input, output and total tokens, active days, output share
 - cost split into input, output, cached and cache write meters
@@ -62,7 +62,7 @@ How it attributes cost: Cost Management meters carry the model name in the meter
 
 Caveats I want you to know: Cost Management lags usage by up to 24 hours and can be re-rated until the invoice closes; token metrics are near real time. The tool uses yesterday as the end of the window for that reason. Cached tokens are counted in `ProcessedPromptTokens` but billed at the cached rate, which is why the effective input price can look very low on a workload with a stable system prompt.
 
-Prompt: *"Run tokenomics on our production Azure OpenAI account for the last 30 days and tell me where the money goes."*
+Prompts: *"Run tokenomics for subscription Contoso-AI for the last 30 days and tell me where the money goes."* then *"Now drill into the account with the highest cost."* The subscription form matters in Copilot Studio: a tool call has 120 seconds, and the first time I asked for "tokenomics for all my deployments" the orchestrator looped the single-account tool over 40 accounts and timed out. One call, ranked by cost, is what you want.
 
 **`finops_azure_ai_quota`** shows tokens-per-minute quota, PTU limits, usage and headroom per region. **`finops_price_lookup`** returns list prices for a model, per direction and deployment type, in any currency. **`finops_create_budget`** puts an Azure budget with 80% actual and 100% forecast alerts on a subscription or resource group. **`finops_cost_alerts`** lists active cost alerts and budgets with current spend.
 
@@ -72,7 +72,7 @@ Prompt: *"Run tokenomics on our production Azure OpenAI account for the last 30 
 2. "Agent limits: top ten by consumption, and which have no limit."
 3. "Billing plans with month-to-date Azure cost."
 4. "Microsoft 365 Copilot licence waste at 30 days."
-5. "Azure AI inventory, then tokenomics for each account that had tokens this month."
+5. "Tokenomics for the AI subscription, last 30 days, then drill into any account with an effective price above list."
 6. "Create a budget on the AI resource group at 110% of last month's cost with alerts to finops@contoso.com." (preview, then confirm)
 
 Every write comes back as a preview first. Read it, then say yes.

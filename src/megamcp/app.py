@@ -24,6 +24,7 @@ from . import __version__
 from .auth.entra import AuthError, principal_from_request_headers, protected_resource_metadata, set_principal
 from .catalog.store import catalog
 from .config import settings
+from .runbook import budget
 from .runbook.invoke import runbook
 from .server import create_server
 
@@ -62,10 +63,12 @@ class AuthMiddleware:
             await send({"type": "http.response.body", "body": body})
             return
         token = set_principal(principal)
+        budget_token = budget.start(settings.tool_time_budget_seconds)
         try:
             await self.app(scope, receive, send)
         finally:
             with contextlib.suppress(Exception):
+                budget.clear(budget_token)
                 set_principal(None)
                 del token
 

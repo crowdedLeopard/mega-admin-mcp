@@ -35,6 +35,7 @@ Every call goes through one executor, so every tool gets the same behaviour:
 
 - **Token refresh**: a 401 clears the cached token for that user and service and retries once.
 - **Throttling**: 429, 503 and 504 are retried with the Retry-After the service asks for (capped at 60 seconds), with exponential backoff and jitter otherwise, up to `MAX_RETRIES`.
+- **Time budget**: Copilot Studio cancels a tool call after 120 seconds, so every MCP request starts a budget (`TOOL_TIME_BUDGET_SECONDS`, default 100). HTTP timeouts shrink to what is left, a Retry-After that would overrun the budget is not slept on (the call returns `retry_after_seconds` instead), and fan-out tools return partial results with a note rather than nothing. Best-effort lookups such as list prices carry their own small retry allowance so they can never hold up the answer.
 - **Transient server errors**: other 5xx are retried twice.
 - **Api-version drift**: Azure and the Power Platform API both tell you which versions they support when you send a wrong one. The executor parses that message and retries with the newest supported version. When you leave api-version out for Azure, it is chosen from the catalog (newest stable for that path or resource provider).
 - **Graph beta fallback**: a GET that fails on v1.0 for a path that the catalog says only exists in beta is retried on beta.

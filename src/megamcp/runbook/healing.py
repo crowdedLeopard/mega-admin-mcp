@@ -143,7 +143,7 @@ def explain(service: str, status: int, body: Any, method: str, url: str, path: s
             hints.append("A path segment is not a valid Graph resource. Check spelling and whether it is a beta-only segment.")
             suggestions = catalog.similar_paths("graph", path.split("?")[0])
     elif status == 429:
-        hints.append("Throttled. The runbook already honoured Retry-After and retried. Reduce page size, add $select, or spread calls out.")
+        hints.append("Throttled. The runbook honours Retry-After while it fits in the tool's time budget (TOOL_TIME_BUDGET_SECONDS); when it does not, the call returns at once with retry_after_seconds. Call again after that, reduce page size, add $select, or spread calls out.")
     elif status >= 500:
         hints.append("The service had an internal error. The runbook retried. If it persists, check the Microsoft 365 / Azure service health (search_operations 'service health').")
 

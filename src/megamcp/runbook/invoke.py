@@ -25,7 +25,7 @@ from ..auth.tokens import TokenError, broker
 from ..catalog.services import Service, resolve_service, scope_for, service_for_url
 from ..catalog.store import catalog
 from ..config import settings
-from . import healing
+from . import budget, healing
 from .policy import audit, policy
 
 log = logging.getLogger("megamcp.runbook")
@@ -152,7 +152,14 @@ class Runbook:
         principal: Principal | None = None,
         raise_on_error: bool = False,
         max_chars: int | None = None,
+        retry_wait_budget: float | None = None,
     ) -> dict[str, Any]:
+        """Execute one REST call with policy, retries, self-healing and audit.
+
+        retry_wait_budget caps the total seconds this call may spend sleeping on
+        429/503/504 retries (best-effort lookups pass a small number). The
+        per-request time budget (runbook.budget) always applies on top.
+        """
         principal = principal or current_principal()
         method = (method or "GET").upper()
         svc: Service
@@ -222,6 +229,8 @@ class Runbook:
         started = time.time()
         resp: httpx.Response | None = None
         error: dict[str, Any] | None = None
+        waited = 0.0
+        retry_later: float | None = None
 
         while True:
             try:
@@ -232,7 +241,8 @@ class Runbook:
                 error = {"status": 0, **e.to_dict(), "url": url}
                 break
             try:
-                resp = await client.request(method, url, headers=req_headers, content=content)
+                timeout = budget.http_timeout(float(settings.request_timeout_seconds))
+                resp = await client.request(method, url, headers=req_headers, content=content, timeout=httpx.Timeout(timeout, connect=min(20.0, timeout)))
                 breaker.ok()
             except httpx.HTTPError as e:
                 breaker.fail()
@@ -252,8 +262,15 @@ class Runbook:
                 healed.append("401 from service; token refreshed and request retried")
                 continue
             if status in (429, 503, 504) and attempt < settings.max_retries:
+                wait = _retry_after(resp) or min(2 ** (attempt + 1) + random.random(), 30)
+                over_call_budget = retry_wait_budget is not None and waited + wait > retry_wait_budget
+                if over_call_budget or not budget.can_wait(wait):
+                    # Waiting would overrun the time the client gives us; answer now and say when to retry.
+                    retry_later = wait
+                    healed.append(f"HTTP {status}; Retry-After {wait:.0f}s exceeds the remaining time budget, not retried (call again in {wait:.0f}s)")
+                    break
                 attempt += 1
-                wait = _retry_after(resp) or min(2 ** attempt + random.random(), 30)
+                waited += wait
                 healed.append(f"HTTP {status}; waited {wait:.1f}s and retried (attempt {attempt})")
                 await asyncio.sleep(wait)
                 continue
@@ -321,6 +338,9 @@ class Runbook:
         if not result["ok"]:
             result.update(healing.explain(svc.name, resp.status_code, shaped.get("body"), method, url, urlparse(url).path))
             result["message"] = _message_from_body(shaped.get("body"), resp.status_code)
+            if retry_later is not None:
+                result["retry_after_seconds"] = round(retry_later)
+                result["message"] = f"{svc.name} is rate limiting ({resp.status_code}); retry in {round(retry_later)}s. " + result["message"]
         dep = self._deprecation_note(svc.name, method, urlparse(url).path, version_used)
         if dep:
             result.setdefault("warnings", []).append(dep)

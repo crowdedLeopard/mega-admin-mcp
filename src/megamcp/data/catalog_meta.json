@@ -1,5 +1,5 @@
 {
-  "generated": "2026-10-27T09:53:24Z",
+  "generated": "2026-10-28T10:39:45Z",
   "builder_version": "1.0.0",
   "sources": {
     "graph": {
@@ -13,7 +13,7 @@
       "sdk": "powerplatform-management 2.0.3578.333"
     },
     "fabric": {
-      "operations": 569
+      "operations": 588
     },
     "curated": {
       "operations": 79
@@ -23,7 +23,7 @@
     "arm": 6195,
     "bap": 10,
     "dataverse": 35,
-    "fabric": 569,
+    "fabric": 588,
     "flow": 7,
     "graph": 47845,
     "o365mgmt": 4,
@@ -33,8 +33,8 @@
     "retailprices": 1
   },
   "warnings": [],
-  "added": 0,
+  "added": 19,
   "removed": 0,
   "duration_seconds": 87,
-  "previous_generated": "2026-10-26T10:14:15Z"
+  "previous_generated": "2026-10-27T09:53:24Z"
 }

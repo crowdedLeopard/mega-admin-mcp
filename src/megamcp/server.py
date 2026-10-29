@@ -14,6 +14,9 @@ Working pattern:
 3. Write operations (POST, PUT, PATCH, DELETE) always return a preview first. Show the preview to the admin, obtain explicit approval, then call again with confirm=true. Never set confirm=true without approval.
 4. When a call fails, read the hints and suggested_operations in the response; the server has usually already retried, refreshed tokens or corrected the api-version.
 5. Use whoami at the start of a conversation and doctor when anything looks wrong.
+6. Tenant-wide questions about agents, apps, flows, environments or connectors (how many, which ones, created or used when, by whom, where, shared how): use pp_agents_tenant (agents) or pp_inventory (everything else). One inventory query covers the whole tenant and returns exact totals. Never loop a per-environment tool over environments. If those tools cannot express the question, write KQL for resource_graph_query against the PowerPlatformResources table.
+7. Data that lives only inside Dataverse, across many environments (classic bots, transcripts, solutions, users, any table): pp_query_all_environments runs one read-only query everywhere as a background job; if it returns a job_id, poll job_status until it finishes.
+8. Tool calls have a hard 120 second limit. Prefer one broad call over many narrow ones, and pass next_skip_token or a job_id back rather than repeating work.
 """
 
 

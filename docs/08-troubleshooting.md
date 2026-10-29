@@ -6,7 +6,7 @@ Start with `doctor`. Ask the agent to run it, or call it from any MCP client. It
 
 **The wizard cannot reach the server / "could not connect".** Open `https://<app>.azurewebsites.net/health` in a browser. If it does not answer, the App Service is not running: check the deployment log in the portal (Deployment Center) and the startup command (`python run.py`). If `/health` works but `/ready` says degraded, read the `configuration_problems` list.
 
-**No tools listed, or fewer tools than expected.** Copilot Studio drops tools whose input schema it cannot handle. All 32 tools use flat primitive parameters on purpose; if you changed a tool signature, keep to string, integer, number and boolean with defaults. The CI test `test_tool_schemas_are_copilot_studio_safe` guards this.
+**No tools listed, or fewer tools than expected.** Copilot Studio drops tools whose input schema it cannot handle. All 37 tools use flat primitive parameters on purpose; if you changed a tool signature, keep to string, integer, number and boolean with defaults. The CI test `test_tool_schemas_are_copilot_studio_safe` guards this.
 
 **Sign-in loop or AADSTS50011 (reply URL mismatch).** The redirect URL from the wizard is not on the app registration. Run `./scripts/setup-entra.ps1 -AppId <client id> -AddRedirectUri "<url>"` and sign in again.
 
@@ -27,6 +27,16 @@ Start with `doctor`. Ask the agent to run it, or call it from any MCP client. It
 **`ConnectorTimeoutError: The connector ... has timed out after 120 seconds`.** Copilot Studio's hard limit per tool call. The server keeps calls inside `TOOL_TIME_BUDGET_SECONDS` (default 100): it stops honouring long `Retry-After` waits and returns `retry_after_seconds` instead, and fan-out tools return partial results with a note. If you still see it, the prompt made the orchestrator loop one tool over many resources; ask for the subscription-wide form (`finops_tokenomics` with `subscription_id` and no `resource_id`) or narrow the request. On a Free App Service plan the first call after idle can also take a minute to warm up; use B1 or above.
 
 **`retry_after_seconds` in a response.** The downstream service is rate limiting and waiting would have overrun the tool's time budget. Ask again after that many seconds. Cost Management (query processing units) and the Retail Prices API are the usual sources.
+
+**The agent loops a per-environment tool, or says it needs a tenant-wide tool.** It is not using the inventory. Ask in tenant terms ("across the tenant", "in all environments") or name the tool: `pp_agents_tenant` for agents, `pp_inventory` for apps, flows and environments. If Copilot Studio still shows the old tool list, open the MCP tool in the agent and refresh it.
+
+**`inventory_query_failed`.** Both inventory routes refused. The response lists what each said. Usually the admin lacks an inventory role (Power Platform Administrator, Global Reader, or AI Administrator for agents only), or Conditional Access wants MFA for Azure Resource Manager. `doctor` includes an inventory check that shows how many agents and environments are visible.
+
+**A KQL error from `resource_graph_query`.** The message carries the parser's line, position and token. Cast property values (`tostring(properties.displayName)`, `todatetime(properties.createdAt)`), and remember `count` is a reserved word: name a summary column something else.
+
+**`Unknown job` from `job_status`.** Jobs are kept in memory for 24 hours on the instance that ran them. A restart or a second instance will not know the id; start the job again.
+
+**Background job lists many `not_a_member` failures.** You are not a user in those environments, so Dataverse refuses. Add yourself in the admin centre, accept the gap, or use the inventory tools, which do not need environment membership.
 
 **401 from a downstream service after the token was refreshed.** The app registration lacks a permission for that API, or the admin lacks the role. `describe_operation` shows the Graph permission. For the Power Platform API the error includes `InsufficientDelegatedPermissions` and the namespace; add the matching `Licensing.*`, `EnvironmentManagement.*` or `CopilotStudio.*` scope and re-consent.
 

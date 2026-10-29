@@ -79,6 +79,13 @@ def register(mcp: MCPServer) -> None:
                           ("arm", "/subscriptions"), ("powerplatform", "/licensing/billingPolicies")):
             r = await runbook.call(svc, "GET", path, query={"api-version": "2024-10-01"} if svc == "powerplatform" else None, max_chars=2000)
             live.append({"service": svc, "path": path, "status": r.get("status"), "ok": r.get("ok"), "message": r.get("message", ""), "hints": r.get("hints", [])})
+        # Power Platform inventory (tenant-wide agents, apps, flows) through Azure Resource Graph
+        inv = await runbook.call("arm", "POST", "/providers/Microsoft.ResourceGraph/resources", api_version="2022-10-01", max_chars=5000,
+                                 body={"query": "PowerPlatformResources | summarize n = count() by type", "options": {"resultFormat": "objectArray"}})
+        inv_counts = {str(x.get("type", "")).split("/")[-1]: x.get("n") for x in ((inv.get("body") or {}).get("data") or [])} if inv.get("ok") else {}
+        live.append({"service": "inventory", "path": "PowerPlatformResources (Azure Resource Graph)", "status": inv.get("status"), "ok": inv.get("ok"),
+                     "message": inv.get("message", "") or (f"{inv_counts.get('agents', 0)} agents, {inv_counts.get('environments', 0)} environments visible" if inv.get("ok") else ""),
+                     "hints": inv.get("hints", []) if not inv.get("ok") else []})
 
         return {
             "ok": not problems and ok_count == len(checks),

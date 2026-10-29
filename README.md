@@ -16,9 +16,10 @@ FinOps is not a feature here, it is the point. The headline tools answer Copilot
 
 ## What it does
 
-**32 tools, three kinds.**
+**37 tools, four kinds.**
 
 - **FinOps and tokenomics (18 tools).** Copilot Credits purchased, allocated and consumed, per tenant and per environment. Allocate credits and set per-agent monthly limits. Billing plans joined to their Azure cost. Microsoft 365 Copilot licence waste. Azure OpenAI inventory, tokens per deployment, cost per meter, effective price per million tokens, list price comparison, quota headroom, budgets and alerts.
+- **Tenant-wide inventory (5 tools).** Every agent, app, flow, environment and connector in the tenant in one query: "how many agents were created this week, by whom, in which environments", "published agents nobody has used for 90 days", "every flow using SharePoint". Raw KQL over Azure Resource Graph when you need it, and a background job that runs one Dataverse query in every environment.
 - **Power Platform administration (4 tools).** Environments, Copilot Studio agents per environment, quarantine or reassign an agent, describe any Dataverse table.
 - **The runbook (10 tools).** `search_operations` over a catalog of about 55,000 operations (Microsoft Graph v1.0 and beta, Azure Resource Manager, Power Platform API, Fabric, Dataverse, Power BI, legacy Power Platform admin, Office 365 Management), `describe_operation` for parameters and permissions, `invoke` to run it, plus paging, async polling, catalog status and changes, audit and a `doctor`.
 
@@ -59,6 +60,7 @@ Then ask the agent: *"Give me the Copilot Credits position and tell me what you 
 | [06 Self-updating and self-healing](docs/06-self-updating-and-self-healing.md) | The daily catalog pipeline and its guards; every healing behaviour; the limits |
 | [07 Security and permissions](docs/07-security-and-permissions.md) | Identity model, safety policy, audit, hardening, what the server will never do |
 | [08 Troubleshooting](docs/08-troubleshooting.md) | The errors you will meet and what to do |
+| [09 Tenant-wide inventory](docs/09-tenant-inventory.md) | Agents, apps and flows across the whole tenant in one call, last-used data, raw KQL, background jobs across every environment |
 
 ## Running it yourself
 
@@ -92,6 +94,8 @@ Container: `docker run -p 8000:8000 -e AUTH_MODE=delegated -e TENANT_ID=... -e C
 | `CATALOG_AUTO_REFRESH`, `CATALOG_REFRESH_HOURS` | true, 24 | Runtime catalog refresh |
 | `GRAPH_AUTO_BETA_FALLBACK`, `ARM_AUTO_API_VERSION` | true | Healing switches |
 | `MAX_RESPONSE_CHARS`, `MAX_RETRIES`, `REQUEST_TIMEOUT_SECONDS` | 60000, 3, 90 | Shaping and resilience |
+| `TOOL_TIME_BUDGET_SECONDS` | 100 | Time each tool call may use; Copilot Studio gives up at 120 |
+| `JOB_TIME_BUDGET_SECONDS`, `JOB_MAX_RUNNING_PER_USER`, `JOB_RETENTION_HOURS`, `FANOUT_CONCURRENCY` | 1500, 3, 24, 8 | Background jobs that query every environment |
 | `PUBLIC_BASE_URL` | | Used in the OAuth protected resource metadata and `/connector.yaml` |
 | `PORT`, `HOST`, `MCP_PATH`, `LOG_LEVEL` | 8000, 0.0.0.0, /mcp, INFO | Hosting |
 

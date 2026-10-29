@@ -53,8 +53,8 @@ def register(mcp: MCPServer) -> None:
         return {"ok": True, "count": len(rows), "returned": min(len(rows), top), "environments": rows[: max(1, min(int(top), 500))]}
 
     @mcp.tool(structured_output=False, annotations=READ, description=(
-        "List Copilot Studio agents (bots) in one environment with owner, authentication mode, published date and state, read from Dataverse. "
-        "environment can be an environment id, display name or Dataverse URL."))
+        "List Copilot Studio agents (bots) in ONE environment with owner, authentication mode, published date and state, read from Dataverse. "
+        "environment can be an environment id, display name or Dataverse URL. For questions about agents across the tenant use pp_agents_tenant instead."))
     async def pp_copilot_studio_agents(
         environment: Annotated[str, Field(description="Environment id, display name or https://org.crm.dynamics.com URL")],
         top: Annotated[int, Field(description="Maximum agents to return (1-500)")] = 100,

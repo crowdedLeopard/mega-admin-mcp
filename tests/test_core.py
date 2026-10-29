@@ -130,3 +130,71 @@ def test_tokenomics_schema_has_subscription_mode():
     props = schema["properties"]
     assert "subscription_id" in props and "top_accounts" in props
     assert "resource_id" not in schema.get("required", [])
+
+
+def test_inventory_query_renders_kql_and_clauses():
+    from megamcp.tools.inventory import Query, kql_str
+
+    q = (Query().where("type == 'microsoft.copilotstudio/agents'").where("todatetime(properties.createdAt) >= ago(7d)")
+         .join_environments().join_usage().project("agent_id = name", "environment = environmentName", "last_used = lastUsed")
+         .order("agent_id", "desc").take(10))
+    k = q.kql()
+    assert k.startswith("PowerPlatformResources\n| where type == 'microsoft.copilotstudio/agents'")
+    assert "join kind=leftouter" in k and "usagerecords" in k and k.rstrip().endswith("| take 10")
+    clauses = q.clauses()
+    kinds = [c["$type"] for c in clauses]
+    assert kinds.count("join") == 2 and kinds[-1] == "take" and "orderby" in kinds
+    # every where becomes a computed flag then an equality, so any boolean expression survives the fallback route
+    assert clauses[0] == {"$type": "extend", "FieldName": "_m1", "Expression": "(type == 'microsoft.copilotstudio/agents')"}
+    assert clauses[1] == {"$type": "where", "FieldName": "_m1", "Operator": "==", "Values": ["true"]}
+    assert kql_str("O'Brien \\ x\n") == "'O\\'Brien \\\\ x '"
+    raw = Query().where("type == 'x'").raw("| summarize dcount(name)")
+    assert raw.kql_only
+    try:
+        raw.clauses()
+        raise AssertionError("raw KQL must not render to clauses")
+    except ValueError:
+        pass
+
+
+def test_inventory_date_and_tri_state_validation():
+    from megamcp.tools.inventory import _tri, kql_date
+
+    assert kql_date("2026-10-22", "x") == "datetime(2026-10-22)"
+    assert kql_date("2026-10-22T10:45:00Z", "x") == "datetime(2026-10-22T10:45:00Z)"
+    for bad in ("yesterday", "2026-10-22; drop", "22/10/2026"):
+        try:
+            kql_date(bad, "x")
+            raise AssertionError(bad)
+        except ValueError:
+            pass
+    assert _tri("Yes", "p") == "yes" and _tri("", "p") == "any" and _tri("false", "p") == "no"
+
+
+def test_job_store_runs_and_isolates_users():
+    from megamcp.auth.entra import Principal
+    from megamcp.runbook.jobs import JobStore
+
+    async def scenario():
+        store = JobStore()
+        alice, bob = Principal(mode="none", oid="alice"), Principal(mode="none", oid="bob")
+
+        async def work(job):
+            job.progress["done"] = 1
+            return {"ok": True, "answer": 42}
+
+        job = store.start(alice, "test", "t", work, total=1)
+        assert await store.wait(job, 5)
+        assert job.status == "succeeded" and job.result == {"ok": True, "answer": 42}
+        assert store.get(job.id, "alice") is job and store.get(job.id, "bob") is None
+
+        async def slow(job):
+            await asyncio.sleep(30)
+            return {}
+
+        j2 = store.start(bob, "test", "slow", slow)
+        store.cancel(j2)
+        await store.wait(j2, 5)
+        assert j2.status == "cancelled"
+
+    asyncio.run(scenario())

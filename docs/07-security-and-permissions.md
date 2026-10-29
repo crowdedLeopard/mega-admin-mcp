@@ -24,6 +24,8 @@ Consequences: the server has no standing access to anything. If the admin loses 
 - `ALLOW_PATTERNS` and `DENY_PATTERNS` are regular expressions matched against `METHOD url`. Deny wins. Examples: deny everything under `/users/` for DELETE; allow only the Power Platform API and Cost Management.
 - `invoke_url` only follows URLs whose host belongs to a known Microsoft service. Nothing can make the server call an arbitrary host with your token.
 - Secrets never appear in responses or logs: Authorization and API key headers are redacted in previews, tokens are not logged.
+- The tenant-wide inventory tools are read-only and respect the inventory's Entra role model: Power Platform Administrator and Global Reader see everything, AI Administrator sees agents only. `resource_graph_query` runs KQL, which cannot change anything. `pp_query_all_environments` only ever sends GET.
+- Background jobs run as the admin who started them, with that admin's delegated token, and only that admin can see or cancel them.
 
 ## Audit
 

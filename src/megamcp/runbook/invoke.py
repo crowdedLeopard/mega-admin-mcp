@@ -506,13 +506,30 @@ def _shrink(body: Any, max_chars: int) -> tuple[Any, bool, int]:
     return {"_truncated_text": text[:max_chars]}, True, 1
 
 
+def _details_text(err: dict[str, Any]) -> str:
+    """Flatten an OData / ARM error 'details' list (Resource Graph puts the real parse error there)."""
+    parts = []
+    for d in (err.get("details") or [])[:4]:
+        if not isinstance(d, dict):
+            continue
+        text = f"{d.get('code', '')}: {d.get('message', '')}".strip(": ")
+        where = ", ".join(f"{k}={d[k]}" for k in ("line", "characterPositionInLine", "token") if d.get(k) not in (None, ""))
+        parts.append(text + (f" ({where})" if where else ""))
+    return "; ".join(p for p in parts if p)
+
+
 def _message_from_body(body: Any, status: int) -> str:
     if isinstance(body, dict):
         err = body.get("error") or body
         if isinstance(err, dict):
             msg = err.get("message") or err.get("Message") or err.get("error_description") or ""
+            details = _details_text(err)
             if isinstance(msg, str) and msg:
+                if details and (msg.startswith("Please provide below info") or len(msg) < 40 or "details" in msg.lower()):
+                    return f"{details} [{msg[:160]}]"[:700]
                 return msg[:500]
+            if details:
+                return details[:700]
         if isinstance(err, str):
             return err[:500]
         if body.get("message"):

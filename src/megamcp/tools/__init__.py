@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from mcp.server.mcpserver import MCPServer
 
-from . import admin, core, finops
+from . import admin, core, fanout, finops, inventory
 
 
 def register_all(mcp: MCPServer) -> None:
     core.register(mcp)
     admin.register(mcp)
+    inventory.register(mcp)
+    fanout.register(mcp)
     finops.register(mcp)

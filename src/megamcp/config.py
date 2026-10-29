@@ -96,6 +96,11 @@ class Settings:
     # Copilot Studio cancels a tool call after 120 s; every MCP request gets this
     # much time and the runbook caps retry waits and HTTP timeouts to what is left.
     tool_time_budget_seconds: int = field(default_factory=lambda: _int("TOOL_TIME_BUDGET_SECONDS", 100))
+    # Background jobs (tenant-wide fan-out across environments)
+    job_time_budget_seconds: int = field(default_factory=lambda: _int("JOB_TIME_BUDGET_SECONDS", 1500))
+    job_max_running_per_user: int = field(default_factory=lambda: _int("JOB_MAX_RUNNING_PER_USER", 3))
+    job_retention_hours: int = field(default_factory=lambda: _int("JOB_RETENTION_HOURS", 24))
+    fanout_concurrency: int = field(default_factory=lambda: _int("FANOUT_CONCURRENCY", 8))
     graph_auto_beta_fallback: bool = field(default_factory=lambda: _bool("GRAPH_AUTO_BETA_FALLBACK", True))
     arm_auto_api_version: bool = field(default_factory=lambda: _bool("ARM_AUTO_API_VERSION", True))
     default_subscription_id: str = field(default_factory=lambda: _env("DEFAULT_SUBSCRIPTION_ID"))

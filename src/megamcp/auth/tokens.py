@@ -144,14 +144,14 @@ class TokenBroker:
             if consent_problem:
                 detail["fix"] = (
                     "The signed-in admin (or the tenant) has not consented to this app for this API yet. Consent happens when the admin "
-                    "signs in to the Copilot Studio connection with scopes <client-id>/.default. If the tier includes admin-only scopes, "
+                    "signs in to the Copilot Studio connection with scopes '<client-id>/.default offline_access'. If the tier includes admin-only scopes, "
                     "a Global Administrator must grant admin consent once (Entra admin centre > App registrations > API permissions, or the URL below)."
                 )
                 detail["admin_consent_url"] = (
                     f"https://login.microsoftonline.com/{settings.tenant_id}/adminconsent?client_id={settings.client_id}"
                 )
             elif "AADSTS50013" in desc or "AADSTS500131" in desc:
-                detail["fix"] = "The incoming token audience is wrong. Scopes in Copilot Studio must be <client-id>/.default (GUID form)."
+                detail["fix"] = "The incoming token audience is wrong. Scopes in Copilot Studio must be '<client-id>/.default offline_access' (GUID form)."
             elif result.get("claims") or err == "interaction_required":
                 detail["claims_challenge"] = result.get("claims")
                 detail["fix"] = "Conditional Access requires the admin to re-authenticate. Ask them to sign in again in Copilot Studio."

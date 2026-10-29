@@ -121,9 +121,11 @@ securityDefinitions:
     tokenUrl: https://login.microsoftonline.com/{settings.tenant_id or 'common'}/oauth2/v2.0/token
     scopes:
       {settings.client_id or '<client-id>'}/.default: Access Mega Admin MCP as the signed-in admin
+      offline_access: Keep the connection signed in (refresh token)
 security:
   - oauth2-auth:
       - {settings.client_id or '<client-id>'}/.default
+      - offline_access
 """
     return PlainTextResponse(yaml_text, media_type="application/x-yaml")
 

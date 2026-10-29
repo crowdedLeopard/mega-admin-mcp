@@ -151,4 +151,4 @@ output mcpEndpoint string = '${publicBaseUrl}/mcp'
 output healthEndpoint string = '${publicBaseUrl}/health'
 output connectorDefinition string = '${publicBaseUrl}/connector.yaml'
 output managedIdentityPrincipalId string = site.identity.principalId
-output nextSteps string = 'In Copilot Studio add an MCP tool with Server URL ${publicBaseUrl}/mcp, OAuth 2.0 Manual, scopes ${clientId}/.default (GUID form, not api://). Then add the wizard redirect URL to the app registration.'
+output nextSteps string = 'In Copilot Studio add an MCP tool with Server URL ${publicBaseUrl}/mcp, OAuth 2.0 Manual, scopes "${clientId}/.default offline_access" (GUID form, not api://; offline_access keeps the connection alive). Then add the wizard redirect URL to the app registration.'

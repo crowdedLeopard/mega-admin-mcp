@@ -33,6 +33,8 @@ securityDefinitions:
     tokenUrl: https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/token
     scopes:
       <client-id>/.default: Access Mega Admin MCP as the signed-in admin (GUID form; Entra rejects api:// when an app requests a token for itself, AADSTS90009)
+      offline_access: Keep the connection signed in (without it Entra issues no refresh token and the connection fails after about an hour)
 security:
   - oauth2-auth:
       - <client-id>/.default
+      - offline_access

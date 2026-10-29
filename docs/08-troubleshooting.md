@@ -14,7 +14,9 @@ Start with `doctor`. Ask the agent to run it, or call it from any MCP client. It
 
 **AADSTS90009 "Application is requesting a token for itself" at sign-in.** The scopes box contains `api://<client id>/.default`. Because the app is both client and resource, Entra insists on the GUID form: `<client id>/.default`. Delete the tool (and the custom connector it created) and run the wizard again with the right value.
 
-**AADSTS500011 / invalid resource / wrong audience.** The scopes box in Copilot Studio must be exactly `<client id>/.default`. Delete the connection and the tool, and add again with the right value.
+**AADSTS500011 / invalid resource / wrong audience.** The scopes box in Copilot Studio must be exactly `<client id>/.default offline_access`. Delete the connection and the tool, and add again with the right value.
+
+**The connection works, then about an hour later "No tools available" or "The connection for this tool is no longer valid"; the connection status says "Failed to refresh access token for service: oauth2pkce ... Missing refresh token".** The scope was entered without `offline_access`, so Entra never issued a refresh token. Fix it once on the connector: Power Apps > Custom connectors > your MCP connector > Edit > Security > Edit, set Scope to `<client id>/.default offline_access`, paste the client secret again (the form insists), Update connector. Then open the tool in Copilot Studio and sign in to the connection again so it gets a refresh token.
 
 **Dynamic discovery or Dynamic OAuth types fail.** Entra does not support dynamic client registration. Use Manual.
 

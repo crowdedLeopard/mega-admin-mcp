@@ -53,7 +53,7 @@ Option C is a container: `ghcr.io/crowdedleopard/mega-admin-mcp:latest`, same en
 1. In Copilot Studio open your agent, go to Tools, select Add a tool, then New tool, then Model Context Protocol.
 2. Server name `Mega Admin MCP`. Server description, something like `Runs any Microsoft admin REST call as the signed-in administrator and answers FinOps questions about Copilot Credits, Microsoft 365 Copilot licences and Azure OpenAI tokens and cost.` The orchestrator reads this to decide when to call the server, so say what it does in plain words.
 3. Server URL `https://<app name>.azurewebsites.net/mcp`.
-4. Authentication: OAuth 2.0, type Manual. Paste the values the setup script printed: client id, client secret, authorization URL, token URL, refresh URL, and scopes `<client id>/.default` (the GUID form; `api://<client id>/.default` fails with AADSTS90009 because the app is requesting a token for itself).
+4. Authentication: OAuth 2.0, type Manual. Paste the values the setup script printed: client id, client secret, authorization URL, token URL, refresh URL, and scopes `<client id>/.default offline_access` (the GUID form, because `api://<client id>/.default` fails with AADSTS90009 when the app requests a token for itself; and `offline_access`, without which the connection stops working after about an hour).
 5. Select Create. Copilot Studio shows a redirect URL. Copy it and run:
 
    ```powershell

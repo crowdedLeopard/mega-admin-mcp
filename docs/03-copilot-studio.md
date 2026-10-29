@@ -25,7 +25,7 @@ Copilot Studio talks to MCP servers over Streamable HTTP through a Power Platfor
    | Authorization URL | `https://login.microsoftonline.com/<tenant id>/oauth2/v2.0/authorize` |
    | Token URL template | `https://login.microsoftonline.com/<tenant id>/oauth2/v2.0/token` |
    | Refresh URL | `https://login.microsoftonline.com/<tenant id>/oauth2/v2.0/token` |
-   | Scopes | `<client id>/.default` (GUID form; the `api://` form fails with AADSTS90009) |
+   | Scopes | `<client id>/.default offline_access` (GUID form; the `api://` form fails with AADSTS90009. Keep `offline_access`: without it there is no refresh token and the connection breaks after about an hour) |
 
 7. Select **Create**. Copilot Studio creates the connector and shows a **redirect URL**. Copy it.
 8. Add the redirect URL to the app registration: `./scripts/setup-entra.ps1 -AppId <client id> -AddRedirectUri "<url>"` (or Entra admin centre, App registrations, Authentication, Add a platform, Web).

@@ -22,6 +22,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from . import __version__
 from .auth.entra import AuthError, principal_from_request_headers, protected_resource_metadata, set_principal
+from .auth.tokens import broker
 from .catalog.store import catalog
 from .config import settings
 from .runbook import budget
@@ -79,9 +80,13 @@ async def health(_: Request) -> Response:
 
 async def ready(_: Request) -> Response:
     problems = settings.validate()
-    ok = bool(catalog.ops) and not problems
+    # Does Entra accept the server's own credential? Cached (10 min ok / 1 min failed), so this stays cheap.
+    cred = await asyncio.to_thread(broker.credential_check) if not problems else {"ok": False, "checked": False}
+    ok = bool(catalog.ops) and not problems and cred.get("ok", False)
+    server_credential = {k: cred.get(k) for k in ("ok", "checked", "credential", "aad_error", "fix") if cred.get(k) is not None}
     return JSONResponse({"status": "ready" if ok else "degraded", "catalog_operations": len(catalog.ops),
                          "catalog_loaded_from": catalog.source, "configuration_problems": problems,
+                         "server_credential": server_credential,
                          "auth_mode": settings.auth_mode, "version": __version__}, status_code=200 if ok else 503)
 
 

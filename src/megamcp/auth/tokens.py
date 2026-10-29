@@ -33,6 +33,42 @@ class TokenError(Exception):
         return {"error": "token_acquisition_failed", "message": str(self), **self.detail}
 
 
+# Entra errors that mean the server's own credential was refused (not the caller's access).
+_SWITCH_TO_MI = ("Or stop using a secret: run scripts/use-managed-identity.ps1, which makes the App Service's managed identity "
+                 "the app's credential and sets USE_MANAGED_IDENTITY_FIC=true.")
+_CREDENTIAL_FIXES: tuple[tuple[tuple[str, ...], str], ...] = (
+    (("AADSTS7000215",), "Entra rejected the server's client secret. The CLIENT_SECRET App Service setting does not hold the Value of a "
+                         "current secret on the app registration: it is often the Secret ID pasted instead of the Value, or a secret that "
+                         "has since been deleted. Create a secret, paste its Value into CLIENT_SECRET, and the app restarts. " + _SWITCH_TO_MI),
+    (("AADSTS7000222",), "The server's client secret has expired. Create a new secret on the app registration and paste its Value into "
+                         "CLIENT_SECRET. " + _SWITCH_TO_MI),
+    (("AADSTS7000216",), "The server sent no credential. Set CLIENT_SECRET, a certificate, or USE_MANAGED_IDENTITY_FIC=true."),
+    (("AADSTS70021", "AADSTS700211", "AADSTS700212", "AADSTS700213"),
+     "Entra found no federated credential on the app registration matching this App Service's managed identity. Add one (Certificates "
+     "and secrets > Federated credentials, scenario Managed identity, pick the web app's identity) or run "
+     "scripts/use-managed-identity.ps1. If the web app was recreated, its identity changed and the credential must be added again."),
+    (("AADSTS700027", "AADSTS700024"), "Entra rejected the server's certificate or client assertion (wrong certificate, thumbprint, or "
+                                       "the clock is off). Check CLIENT_CERTIFICATE_PATH and CLIENT_CERTIFICATE_THUMBPRINT."),
+    (("AADSTS700016",), "Entra cannot find the app. CLIENT_ID or TENANT_ID is wrong, or the app registration was deleted."),
+    (("AADSTS7000112",), "The app registration is disabled in this tenant. An Application Administrator can re-enable it."),
+    (("ManagedIdentityCredential", "managed identity", "IDENTITY_ENDPOINT"),
+     "USE_MANAGED_IDENTITY_FIC=true, but the App Service has no managed identity the server can reach. Turn on the system-assigned "
+     "identity (App Service > Identity) and add it as a federated credential on the app registration, or set "
+     "USE_MANAGED_IDENTITY_FIC=false and use CLIENT_SECRET."),
+)
+
+
+def is_credential_error(text: str) -> bool:
+    return any(code in text for codes, _ in _CREDENTIAL_FIXES[:-1] for code in codes)
+
+
+def credential_fix(text: str) -> str:
+    for codes, fix in _CREDENTIAL_FIXES:
+        if any(code.lower() in text.lower() for code in codes):
+            return fix
+    return "Run doctor and read server_credential. Check TENANT_ID, CLIENT_ID and the credential settings on the App Service."
+
+
 @dataclass
 class _Cached:
     token: str
@@ -45,6 +81,8 @@ class TokenBroker:
         self._lock = threading.Lock()
         self._msal_app = None
         self._msal_app_created = 0.0
+        self._mi_cred = None
+        self._cred_check: dict[str, Any] | None = None
         self._cli_cred = None
         self._app_cred = None
 
@@ -96,16 +134,45 @@ class TokenBroker:
             return self._app_identity(scope)
         return self._developer(scope)
 
+    # --- the server's own credential --------------------------------------------
+    def credential_check(self, max_age: float | None = None) -> dict[str, Any]:
+        """Prove the server's own credential (secret, certificate or managed identity) is accepted by Entra.
+
+        Asks for an app-only Graph token. That needs no permissions and no user, so a failure here
+        means the server cannot authenticate itself, whatever the signed-in admin's roles are.
+        Cached: ten minutes when it works, one minute when it does not.
+        """
+        if settings.auth_mode != "delegated":
+            return {"ok": True, "checked": False, "credential": self._credential_description(),
+                    "note": "Only checked in delegated mode."}
+        now = time.time()
+        c = self._cred_check
+        if c and now - c["_at"] < (max_age if max_age is not None else (600 if c["ok"] else 60)):
+            return {k: v for k, v in c.items() if k != "_at"}
+        out: dict[str, Any] = {"ok": False, "checked": True, "credential": self._credential_description()}
+        try:
+            result = self._msal().acquire_token_for_client(scopes=["https://graph.microsoft.com/.default"])
+            if "access_token" in result:
+                out["ok"] = True
+            else:
+                desc = str(result.get("error_description", ""))
+                out.update(aad_error=result.get("error"), description=desc[:400], fix=credential_fix(desc))
+        except Exception as e:  # noqa: BLE001  (managed identity endpoint missing, unreadable certificate, ...)
+            msg = str(e)
+            out.update(aad_error=type(e).__name__, description=msg[:400], fix=credential_fix(msg))
+        self._cred_check = {**out, "_at": now}
+        return out
+
     # --- delegated (OBO) ------------------------------------------------------
     def _msal(self):
         import msal
 
-        # Rebuild hourly when using a managed-identity federated credential so
-        # the client assertion stays fresh.
-        if self._msal_app is not None and (not settings.use_managed_identity_fic or time.time() - self._msal_app_created < 3000):
+        if self._msal_app is not None:
             return self._msal_app
         if settings.use_managed_identity_fic:
-            credential: Any = {"client_assertion": self._mi_client_assertion()}
+            # A callable: MSAL asks for a fresh assertion whenever it goes to Entra, and the
+            # managed identity credential caches and renews its own token.
+            credential: Any = {"client_assertion": self._mi_client_assertion}
         elif settings.client_certificate_path:
             with open(settings.client_certificate_path, "r", encoding="utf-8") as f:
                 pem = f.read()
@@ -121,15 +188,22 @@ class TokenBroker:
         return self._msal_app
 
     def _mi_client_assertion(self) -> str:
-        from azure.identity import ManagedIdentityCredential
+        if self._mi_cred is None:
+            from azure.identity import ManagedIdentityCredential
 
-        kwargs = {"client_id": settings.managed_identity_client_id} if settings.managed_identity_client_id else {}
-        cred = ManagedIdentityCredential(**kwargs)
-        return cred.get_token("api://AzureADTokenExchange/.default").token
+            kwargs = {"client_id": settings.managed_identity_client_id} if settings.managed_identity_client_id else {}
+            self._mi_cred = ManagedIdentityCredential(**kwargs)
+        return self._mi_cred.get_token("api://AzureADTokenExchange/.default").token
 
     def _obo(self, scope: str, user_assertion: str) -> tuple[str, float]:
-        app = self._msal()
-        result = app.acquire_token_on_behalf_of(user_assertion=user_assertion, scopes=[scope])
+        try:
+            app = self._msal()
+            result = app.acquire_token_on_behalf_of(user_assertion=user_assertion, scopes=[scope])
+        except Exception as e:  # noqa: BLE001  (managed identity endpoint, certificate file, network)
+            msg = str(e)
+            raise TokenError(f"The server could not use its own credential for {scope}", {
+                "aad_error": type(e).__name__, "description": msg[:600], "scope": scope,
+                "server_credential_problem": True, "fix": credential_fix(msg)}) from e
         if "access_token" not in result:
             err = result.get("error", "unknown_error")
             desc = result.get("error_description", "")
@@ -141,7 +215,13 @@ class TokenBroker:
                 "scope": scope,
             }
             consent_problem = "AADSTS65001" in desc or result.get("suberror") == "consent_required"
-            if consent_problem:
+            server_fix = credential_fix(desc) if is_credential_error(desc) else ""
+            if server_fix:
+                # The server could not prove its own identity. Nothing to do with the caller's access.
+                detail["server_credential_problem"] = True
+                detail["fix"] = server_fix
+                self._cred_check = None
+            elif consent_problem:
                 detail["fix"] = (
                     "The signed-in admin (or the tenant) has not consented to this app for this API yet. Consent happens when the admin "
                     "signs in to the Copilot Studio connection with scopes '<client-id>/.default offline_access'. If the tier includes admin-only scopes, "

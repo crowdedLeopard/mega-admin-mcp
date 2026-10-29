@@ -67,6 +67,7 @@ def register(mcp: MCPServer) -> None:
             except Exception as e:  # noqa: BLE001
                 return {"service": name, "scope": scope, "status": "failed", "message": str(e)[:300]}
 
+        cred = await asyncio.to_thread(broker.credential_check, 0)
         targets = [(k, v.scope) for k, v in SERVICES.items() if v.scope]
         if dataverse_org_url:
             targets.append(("dataverse", dataverse_org_url.rstrip("/") + "/.default"))
@@ -92,8 +93,9 @@ def register(mcp: MCPServer) -> None:
                      "hints": inv.get("hints", []) if not inv.get("ok") else []})
 
         return {
-            "ok": not problems and ok_count == len(checks),
+            "ok": not problems and cred.get("ok", True) and ok_count == len(checks),
             "configuration_problems": problems,
+            "server_credential": cred,
             "auth": broker.describe(),
             "caller": p.summary(),
             "token_checks": list(checks),
@@ -101,7 +103,7 @@ def register(mcp: MCPServer) -> None:
             "catalog": catalog.status(),
             "circuit_breakers_open": runbook.breaker_status(),
             "audit": audit.stats(),
-            "advice": _advice(problems, list(checks), live),
+            "advice": _advice(problems, list(checks), live, cred),
         }
 
     @mcp.tool(structured_output=False, annotations=READ, description=(
@@ -242,10 +244,15 @@ def register(mcp: MCPServer) -> None:
         return {"ok": True, "stats": audit.stats(), "entries": audit.recent(max(1, min(int(limit), 200)), user)}
 
 
-def _advice(problems: list[str], checks: list[dict[str, Any]], live: list[dict[str, Any]]) -> list[str]:
+def _advice(problems: list[str], checks: list[dict[str, Any]], live: list[dict[str, Any]], cred: dict[str, Any] | None = None) -> list[str]:
     advice: list[str] = []
     if problems:
         advice.append("Fix the configuration problems first (environment variables on the host).")
+    if cred and not cred.get("ok"):
+        # One root cause, not one failure per service: say it once and stop there.
+        advice.append(f"The server's own credential ({cred.get('credential')}) is refused by Entra, so every token below fails for every user. "
+                      f"Fix: {cred.get('fix')}")
+        return advice
     failed = [c for c in checks if c["status"] == "failed"]
     for c in failed:
         fix = c.get("fix")

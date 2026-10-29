@@ -134,6 +134,41 @@ _role_names_cache: dict[str, str] = {}
 FACTS_TTL = 600
 
 
+_ROLE_NAMES: dict[str, str] | None = None
+
+
+def role_name(template_id: Any) -> str | None:
+    """Built-in Entra role name from its role template id (the same in every tenant)."""
+    global _ROLE_NAMES
+    if _ROLE_NAMES is None:
+        try:
+            import json
+
+            from .config import DATA_DIR
+            _ROLE_NAMES = {k.lower(): v for k, v in json.loads((DATA_DIR / "entra_role_templates.json").read_text("utf-8")).get("roles", {}).items()}
+        except Exception:  # noqa: BLE001
+            log.warning("entra_role_templates.json could not be read; role names fall back to Graph displayName")
+            _ROLE_NAMES = {}
+    return _ROLE_NAMES.get(str(template_id or "").lower())
+
+
+def directory_role_names(members: list[dict[str, Any]]) -> list[str]:
+    """Active directory role names from /me/transitiveMemberOf.
+
+    With only User.Read (the core tier) Graph returns directoryRole objects with displayName null but
+    roleTemplateId set, so the name comes from the template id. Custom or unknown templates keep their id.
+    """
+    names: set[str] = set()
+    for v in members:
+        if not str(v.get("@odata.type", "")).endswith("directoryRole"):
+            continue
+        tid = v.get("roleTemplateId")
+        name = v.get("displayName") or role_name(tid) or (f"Entra role {tid}" if tid else None)
+        if name:
+            names.add(name)
+    return sorted(names)
+
+
 async def caller_facts(principal: Principal | None = None, force: bool = False) -> dict[str, Any]:
     """Active directory roles and object id of the signed-in admin. Never raises; cached for ten minutes."""
     from .runbook.invoke import runbook  # late import: runbook imports this module
@@ -159,8 +194,15 @@ async def caller_facts(principal: Principal | None = None, force: bool = False) 
         facts["upn"] = facts["upn"] or b.get("userPrincipalName") or ""
         facts["name"] = b.get("displayName")
     if isinstance(roles_r, dict) and roles_r.get("ok"):
-        vals = (roles_r.get("body") or {}).get("value", [])
-        facts["roles"] = sorted({v.get("displayName") for v in vals if str(v.get("@odata.type", "")).endswith("directoryRole") and v.get("displayName")})
+        vals = list((roles_r.get("body") or {}).get("value", []))
+        next_link, pages = roles_r.get("next_link"), 1
+        while next_link and pages < 5:  # people in more than 999 groups
+            more = await runbook.call("graph", "GET", next_link, principal=p, max_chars=400_000, retry_wait_budget=3)
+            if not (isinstance(more, dict) and more.get("ok")):
+                break
+            vals += (more.get("body") or {}).get("value", [])
+            next_link, pages = more.get("next_link"), pages + 1
+        facts["roles"] = directory_role_names(vals)
     else:
         facts["error"] = (roles_r.get("message") if isinstance(roles_r, dict) else str(roles_r))[:200] if roles_r else "role lookup failed"
     _facts_cache[key] = (time.time(), facts)
@@ -318,7 +360,13 @@ async def classify(problem: dict[str, Any], tool: str = "", principal: Principal
     elif problem.get("error") == "token_acquisition_failed":
         scope = str(problem.get("scope") or "")
         svc_name = next((n for n in ("graph", "management.azure", "powerplatform", "powerbi", "manage.office", "dynamics", "crm", "devops", "fabric") if n in scope), scope)
-        if "AADSTS65001" in text or problem.get("suberror") == "consent_required" or "consent" in low:
+        if problem.get("server_credential_problem"):
+            a.update(kind="server_credential", reason="The Mega Admin MCP server could not prove its own identity to Microsoft Entra, so it cannot "
+                     "call any Microsoft API for anyone right now. This is not about your roles or permissions.",
+                     missing="nothing on your account; the server's own credential (client secret, certificate or managed identity)",
+                     who_can_fix="Whoever runs this Mega Admin MCP server (the App Service settings and the app registration).",
+                     how_to_fix=str(problem.get("fix") or "Run doctor and read server_credential."))
+        elif "AADSTS65001" in text or problem.get("suberror") == "consent_required" or "consent" in low:
             a.update(kind="consent_missing", reason=f"The app has not been granted permission to call {scope.split('/.default')[0] or 'this API'} on your behalf yet.",
                      missing=f"consent for the app's permissions to {svc_name}", who_can_fix=FIX_CONSENT,
                      how_to_fix="If the permission is user-consentable, sign out of the Copilot Studio connection and sign in again; otherwise ask for admin consent.",
@@ -429,7 +477,7 @@ async def classify(problem: dict[str, Any], tool: str = "", principal: Principal
                  missing="permission for this action", who_can_fix="Your administrator for that service.", how_to_fix="Check the role or permission the service requires.")
 
     # Confirm against the caller's actual roles where roles matter
-    if a.get("kind") in ("role_missing",) or (need and need.roles and a.get("kind") not in ("server_policy", "consent_missing", "app_permission_missing")):
+    if a.get("kind") in ("role_missing",) or (need and need.roles and a.get("kind") not in ("server_policy", "server_credential", "consent_missing", "app_permission_missing")):
         facts = await caller_facts(p)
         if facts.get("roles") is not None:
             a["your_roles"] = facts["roles"] or ["(no admin roles active)"]
@@ -458,6 +506,9 @@ def _user_message(a: dict[str, Any]) -> str:
     if a.get("kind") == "server_policy":
         return (f"Sorry, {what} is switched off on this server: its administrator has set "
                 f"{a.get('reason', '').split(': ', 1)[-1].rstrip('.')}. Nothing is wrong with your account. {a.get('how_to_fix', '')}")
+    if a.get("kind") == "server_credential":
+        return (f"Sorry, I can't do {what} right now because the Mega Admin MCP server itself can't sign in to Microsoft Entra. "
+                f"Nothing is wrong with your account or roles. {a.get('who_can_fix', '')} {a.get('how_to_fix', '')}").strip()
     mine = a.get("your_roles")
     has = f" Your account currently has: {roles_text(mine)}." if isinstance(mine, list) and mine else ""
     return (f"Sorry, you don't have access to {what}. {a.get('reason', '')} What's missing: {a.get('missing', '')}.{has} "

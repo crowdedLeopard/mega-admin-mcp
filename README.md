@@ -45,6 +45,7 @@ az login --tenant <your tenant>
 az group create -n rg-mega-admin-mcp -l uksouth
 az deployment group create -g rg-mega-admin-mcp -f deploy/bicep/main.bicep `
   -p appName=<unique> tenantId=<tid> clientId=<cid> clientSecret=<secret>  # 2. server on App Service (or use the button)
+./scripts/use-managed-identity.ps1 -ResourceGroup rg-mega-admin-mcp -WebAppName <unique> -AppId <cid>  # 2b. recommended: server stops needing the secret
 # 3. Copilot Studio > Tools > Add a tool > Model Context Protocol > OAuth 2.0 Manual, paste the values the script printed
 ```
 
@@ -106,7 +107,7 @@ Container: `docker run -p 8000:8000 -e AUTH_MODE=delegated -e TENANT_ID=... -e C
 ```
 src/megamcp/            the server (auth, catalog, runbook, tools, ASGI app)
 src/megamcp/data/       catalog.json.gz, changelog.json, curated/*.json
-scripts/                build_catalog.py, setup-entra.ps1, permissions.json, smoke_test.py
+scripts/                build_catalog.py, setup-entra.ps1, use-managed-identity.ps1, permissions.json, smoke_test.py
 deploy/                 main.bicep, azuredeploy.json (Deploy to Azure), Copilot Studio connector definition
 .github/workflows/      ci.yml, catalog-daily.yml
 docs/                   the admin documentation

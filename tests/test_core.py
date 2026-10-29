@@ -274,3 +274,60 @@ def test_every_tool_is_wrapped_for_access_explanations():
     tools = server._tool_manager.list_tools()
     assert all(getattr(t.fn, "_megamcp_wrapped", False) for t in tools)
     assert any(t.name == "my_access" for t in tools)
+
+
+def test_server_credential_failure_is_not_blamed_on_the_user():
+    from megamcp.auth.tokens import TokenBroker, TokenError, credential_fix, is_credential_error
+    from megamcp.config import settings
+
+    assert is_credential_error("AADSTS7000215: Invalid client secret provided.")
+    assert "Secret ID" in credential_fix("AADSTS7000215: Invalid client secret provided.")
+    assert "federated credential" in credential_fix("AADSTS700213: No matching federated identity record found")
+    assert not is_credential_error("AADSTS65001: The user or administrator has not consented")
+
+    class FakeApp:
+        def acquire_token_on_behalf_of(self, user_assertion, scopes):
+            return {"error": "invalid_client", "error_description": "AADSTS7000215: Invalid client secret provided. Ensure the secret being sent "
+                    "in the request is the client secret value, not the client secret ID."}
+
+        def acquire_token_for_client(self, scopes):
+            return self.acquire_token_on_behalf_of("", scopes)
+
+    b = TokenBroker()
+    b._msal_app = FakeApp()
+    try:
+        b._obo("https://management.azure.com/.default", "user-token")
+        raise AssertionError("expected TokenError")
+    except TokenError as e:
+        problem = e.to_dict()
+    assert problem["server_credential_problem"] is True and "CLIENT_SECRET" in problem["fix"]
+
+    old = settings.auth_mode
+    settings.auth_mode = "delegated"
+    try:
+        check = b.credential_check()
+        assert check["ok"] is False and check["checked"] is True and "Secret ID" in check["fix"]
+    finally:
+        settings.auth_mode = old
+
+    access = _offline_access(["Power Platform Administrator"])
+    a = asyncio.run(access.classify(problem, "pp_inventory"))
+    assert a["kind"] == "server_credential" and "your_roles" not in a
+    assert "Nothing is wrong with your account" in a["user_message"] and "don't have access" not in a["user_message"]
+
+
+def test_directory_roles_named_from_template_ids_on_core_tier():
+    from megamcp.access import directory_role_names
+
+    # The shape Graph returns for /me/transitiveMemberOf when the token only has User.Read (seen live 29 Oct 2026)
+    members = [
+        {"@odata.type": "#microsoft.graph.group", "id": "4b5ff012-1673-4253-bb88-13e42e6eb3ed", "displayName": None},
+        {"@odata.type": "#microsoft.graph.directoryRole", "id": "e37ac68f-2889-4a98-af94-80265bb956b9", "displayName": None,
+         "roleTemplateId": "11648597-926c-4cf3-9c36-bcebb0ba8dcc"},
+        {"@odata.type": "#microsoft.graph.directoryRole", "id": "4e2ebffb-552f-4602-9ad4-37a6bac88644", "displayName": None,
+         "roleTemplateId": "194ae4cb-b126-40b2-bd5b-6091b380977d"},
+        {"@odata.type": "#microsoft.graph.directoryRole", "id": "x", "displayName": "Global Reader", "roleTemplateId": "f2ef992c-3afb-46b9-b7cf-a126ee74c451"},
+        {"@odata.type": "#microsoft.graph.directoryRole", "id": "y", "displayName": None, "roleTemplateId": "00000000-1111-2222-3333-444444444444"},
+    ]
+    assert directory_role_names(members) == ["Entra role 00000000-1111-2222-3333-444444444444", "Global Reader",
+                                             "Power Platform Administrator", "Security Administrator"]

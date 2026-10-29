@@ -63,7 +63,17 @@ The server needs a credential of its own to perform the on-behalf-of exchange. T
 
 1. **Client secret** in the `CLIENT_SECRET` setting. Simple. Rotate it before it expires (the script defaults to one year). Store it as a Key Vault reference in App Service rather than plain text when you can.
 2. **Certificate**: set `CLIENT_CERTIFICATE_PATH` (PEM with private key) and `CLIENT_CERTIFICATE_THUMBPRINT`.
-3. **Managed identity as federated credential**: set `USE_MANAGED_IDENTITY_FIC=true`. The App Service's system-assigned identity presents itself to Entra as the app's credential and nothing needs rotating. Configure it on the app registration under Certificates and secrets, Federated credentials, Managed identity, pointing at the web app's identity. Then remove the secret.
+3. **Managed identity as federated credential**: set `USE_MANAGED_IDENTITY_FIC=true`. The App Service's system-assigned identity presents itself to Entra as the app's credential and nothing needs rotating. One command does all of it:
+
+   ```powershell
+   ./scripts/use-managed-identity.ps1 -ResourceGroup <rg> -WebAppName <app name> -AppId <client id>
+   ```
+
+   It turns on the web app's identity, adds the federated credential to the app registration (Certificates and secrets, Federated credentials, scenario Managed identity), and sets the flag. It never reads or deletes a secret, so you can go back by setting the flag to false. When you are happy, delete the secret.
+
+Use the third one. Five days after go-live my own server stopped working for everyone: after a secret rotation, the value in `CLIENT_SECRET` no longer matched any secret on the app registration. Every tool failed, and the agent quite reasonably blamed the secret. With the managed identity there is no secret on the server to get wrong, expire or leak. The connector in Copilot Studio still needs a secret for the sign-in itself; that one lives in the connector, not on the server.
+
+The server checks its own credential. `/ready` and `doctor` both show `server_credential`: they ask Entra for an app-only Graph token, which needs no permissions and no user, so a failure there means the server cannot authenticate itself at all. The fix text names the Entra error (invalid secret, expired secret, no matching federated credential) and what to change. When a tool hits it, the agent tells the admin it is the server's credential, not their access.
 
 ## The redirect URL
 

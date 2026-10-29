@@ -399,7 +399,7 @@ def register(mcp: MCPServer) -> None:  # noqa: C901 (big but flat on purpose)
             insights.append("No billing plan has the Copilot Studio meter enabled, so environments cannot overflow to Azure pay-as-you-go. That is a hard stop when prepaid credits run out.")
         return {"ok": True, "tenant_currencies": currencies, "copilot_credits": mcs, "pay_as_you_go_plans": payg_plans, "pay_as_you_go_error": payg_error,
                 "insights": insights,
-                "next_steps": ["finops_environment_credits <environment> for one environment", "finops_copilot_studio_consumption_report for agent-level billed credits",
+                "next_steps": ["finops_environment_credits <environment> for one environment", "finops_agent_credits_history for spend per agent over the last 6 or 12 months",
                                "finops_billing_plans for the Azure side of pay-as-you-go"]}
 
     @mcp.tool(structured_output=False, annotations=READ, description=(
@@ -487,7 +487,7 @@ def register(mcp: MCPServer) -> None:  # noqa: C901 (big but flat on purpose)
 
     @mcp.tool(structured_output=False, annotations=READ, description=(
         "List per-agent monthly Copilot Credit limits (resource thresholds) configured in the tenant: limit, notification threshold, "
-        "hard stop flag, current consumption, environment."))
+        "hard stop flag, current consumption (month to date only), environment. For spend over longer periods use finops_agent_credits_history."))
     async def finops_agent_limits(
         entitlement_id: Annotated[str, Field(description="MCSMessages (Copilot Credits) or AI")] = "MCSMessages",
         environment_id: Annotated[str, Field(description="Optional environment id to filter")] = "",
@@ -635,7 +635,7 @@ def register(mcp: MCPServer) -> None:  # noqa: C901 (big but flat on purpose)
         if start_resp is None:
             return err("The Copilot Studio licensing report endpoint (POST /copilotstudio/licensing/reports/{ReportName}) returned 404 for every report name tried. "
                        "As of October 2026 Microsoft has not published the accepted report names and the endpoint may not be enabled for this tenant yet. "
-                       "Alternatives: finops_environment_credits (allocation and consumption per environment), finops_agent_limits (consumption per agent, month to date), "
+                       "Use finops_agent_credits_history instead: billed and non-billable credits per agent for any period up to 24 months. Other options: finops_agent_limits (per agent, month to date), "
                        "or download the consumption report in the Power Platform admin centre (Licensing > Copilot Studio > Download report).",
                        attempts=tried)
         poll_url = (start_resp.get("async_operation") or {}).get("poll_url") or start_resp.get("response_headers", {}).get("location")

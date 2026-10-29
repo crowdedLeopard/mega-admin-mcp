@@ -30,7 +30,7 @@ Copilot Studio talks to MCP servers over Streamable HTTP through a Power Platfor
 7. Select **Create**. Copilot Studio creates the connector and shows a **redirect URL**. Copy it.
 8. Add the redirect URL to the app registration: `./scripts/setup-entra.ps1 -AppId <client id> -AddRedirectUri "<url>"` (or Entra admin centre, App registrations, Authentication, Add a platform, Web).
 9. Back in the wizard select **Next**, then **Create a new connection**. A sign-in window opens. Sign in and accept the consent prompt; it lists the permissions from the tier you chose. On the core tier any admin can accept it; on the full tier a Global Administrator must have consented first or the prompt says admin approval is needed.
-10. Select **Add to agent**. The tools page now lists 38 tools from the server.
+10. Select **Add to agent**. The tools page now lists 39 tools from the server.
 
 ## Making the agent use it well
 

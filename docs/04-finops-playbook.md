@@ -28,11 +28,19 @@ Prompt: *"Allocate 250,000 credits to Contoso Production and stop it drawing fro
 
 Prompt: *"Which agents have used the most credits this month and which have no limit?"* then *"Put a 20,000 credit monthly limit with an 80% alert on the top one."*
 
+**`finops_agent_credits_history`** answers the question every finance conversation starts with: what have we spent, on which agents, over the last six or twelve months? It returns billed and non-billable Copilot Credits per agent with the agent name, creator, environment, number of users, top features and last activity, plus a month-by-month tenant trend. `group_by` switches the view to environment, creator, user or feature, and `environment` or `name_contains` narrow it. Any period up to 24 months works (`months`, or `from_date` and `to_date`).
+
+How it gets there matters, because the obvious API does not work. The tenant-wide per-agent operation (`/licensing/entitlements/MCSMessages/resources`) answers 403 for a Power Platform Administrator, and the licensing report endpoint answers 404. What does work is per user: one call lists everyone who consumed credits in the period, and a call per user returns their usage per agent and feature. The server adds those up. Each user's agent rows add up exactly to that user's total, and the result shows `coverage`: how much of the tenant's billed total it could attribute to agents, and which users could not be broken down. My dev tenant has data back to May 2025, so twelve months is real history, not an estimate.
+
+The scan touches every consuming user, so the first run for a period is a background job: in my tenant about 220 users and a few minutes. The agent gets a job id, polls `job_status`, and shows the answer when it is ready. The result is cached for six hours, so the follow-up questions ("now by environment", "just the Sales environment", "who created the top five") come back instantly.
+
+Prompt: *"Copilot Credits spend over the last six months by agent, with creator and environment."* then *"Same for twelve months, grouped by environment."*
+
 **`finops_billing_plans`** joins the admin centre with the Azure bill. For each billing plan: status, region, linked environments, Azure subscription and resource group, which meters are enabled, and month-to-date cost from Cost Management split by meter (you will see "Pay As You Go Copilot Credit" as a meter when the credits meter is spinning).
 
 **`finops_link_environment_billing_plan`** links or unlinks an environment to a plan, with preview.
 
-**`finops_copilot_studio_consumption_report`** calls the Power Platform API that generates the downloadable consumption report (by environment, agent, product, feature, channel, model). In October 2026 Microsoft had not published the accepted report names and the endpoint returned 404 in my tenant for every name tried; the tool tells you that honestly and points at the alternatives. It will start working when Microsoft lights it up, because the catalog and the tool are already there.
+**`finops_copilot_studio_consumption_report`** calls the Power Platform API that generates the downloadable consumption report (by environment, agent, product, feature, channel, model). In October 2026 it returned 404 in my tenant for every report name, including `FeatureDetailsPerResource` and `BillingDetailsPerEnvironment` from the SDK, on every supported API version; the tool tells you that honestly and points at `finops_agent_credits_history`. It will start working when Microsoft lights it up, because the catalog and the tool are already there.
 
 ## Microsoft 365 Copilot licences
 

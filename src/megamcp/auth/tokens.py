@@ -83,6 +83,7 @@ class TokenBroker:
         self._msal_app_created = 0.0
         self._mi_cred = None
         self._cred_check: dict[str, Any] | None = None
+        self._assertions: dict[str, tuple[float, str]] = {}  # caller -> (exp, freshest incoming user token)
         self._cli_cred = None
         self._app_cred = None
 
@@ -98,6 +99,36 @@ class TokenBroker:
         with self._lock:
             self._cache[key] = _Cached(token, exp)
         return token
+
+    # --- freshest user token per admin -------------------------------------------
+    # A background job keeps the Principal of the request that started it, and that user token expires
+    # (about an hour after Copilot Studio obtained it). Every later request from the same admin (job_status
+    # polls included) brings a fresh one, so on-behalf-of always uses the newest token seen for that admin.
+    def note_user_token(self, principal: Principal | None) -> None:
+        if principal is None or principal.mode != "delegated" or not principal.raw_token:
+            return
+        exp = float(principal.claims.get("exp") or 0)
+        now = time.time()
+        with self._lock:
+            cur = self._assertions.get(principal.cache_key)
+            if not cur or exp > cur[0]:
+                self._assertions[principal.cache_key] = (exp, principal.raw_token)
+            if len(self._assertions) > 500:
+                for k in [k for k, (e, _) in self._assertions.items() if e < now - 3600]:
+                    self._assertions.pop(k, None)
+
+    def freshest_assertion(self, principal: Principal) -> tuple[float, str]:
+        own = (float(principal.claims.get("exp") or 0), principal.raw_token)
+        with self._lock:
+            best = self._assertions.get(principal.cache_key)
+        return best if best and best[0] > own[0] else own
+
+    def assertion_valid_for(self, principal: Principal) -> float:
+        """Seconds until the freshest user token for this admin expires (negative when expired; infinite when not delegated)."""
+        if principal.mode != "delegated":
+            return float("inf")
+        exp = self.freshest_assertion(principal)[0]
+        return exp - time.time() if exp else float("inf")
 
     def invalidate(self, scope: str, principal: Principal) -> None:
         with self._lock:
@@ -129,7 +160,13 @@ class TokenBroker:
         if mode == "delegated":
             if principal.mode != "delegated" or not principal.raw_token:
                 raise TokenError("No delegated user token on this request")
-            return self._obo(scope, principal.raw_token)
+            exp, assertion = self.freshest_assertion(principal)
+            if exp and exp < time.time():
+                raise TokenError(f"On-behalf-of exchange failed for {scope}: the admin's sign-in token expired", {
+                    "aad_error": "user_token_expired", "scope": scope, "user_token_expired": True,
+                    "fix": "The admin's token from Copilot Studio expired while a background job was running. The job picks up a fresh "
+                           "one the next time the admin talks to the agent (for example a job_status call)."})
+            return self._obo(scope, assertion)
         if mode == "apikey":
             return self._app_identity(scope)
         return self._developer(scope)

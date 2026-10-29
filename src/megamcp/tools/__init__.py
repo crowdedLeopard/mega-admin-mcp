@@ -10,7 +10,7 @@ from __future__ import annotations
 from mcp.server.mcpserver import MCPServer
 
 from ..access import enrich
-from . import admin, core, fanout, finops, inventory, myaccess
+from . import admin, core, credits_history, fanout, finops, inventory, myaccess
 
 
 def register_all(mcp: MCPServer) -> None:
@@ -20,6 +20,7 @@ def register_all(mcp: MCPServer) -> None:
     inventory.register(mcp)
     fanout.register(mcp)
     finops.register(mcp)
+    credits_history.register(mcp)
     _explain_access_everywhere(mcp)
 
 

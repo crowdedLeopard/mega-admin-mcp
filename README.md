@@ -16,9 +16,9 @@ FinOps is not a feature here, it is the point. The headline tools answer Copilot
 
 ## What it does
 
-**38 tools, four kinds.**
+**39 tools, four kinds.**
 
-- **FinOps and tokenomics (18 tools).** Copilot Credits purchased, allocated and consumed, per tenant and per environment. Allocate credits and set per-agent monthly limits. Billing plans joined to their Azure cost. Microsoft 365 Copilot licence waste. Azure OpenAI inventory, tokens per deployment, cost per meter, effective price per million tokens, list price comparison, quota headroom, budgets and alerts.
+- **FinOps and tokenomics (19 tools).** Copilot Credits purchased, allocated and consumed, per tenant and per environment. Spend per agent over the last 6 or 12 months with creator and environment. Allocate credits and set per-agent monthly limits. Billing plans joined to their Azure cost. Microsoft 365 Copilot licence waste. Azure OpenAI inventory, tokens per deployment, cost per meter, effective price per million tokens, list price comparison, quota headroom, budgets and alerts.
 - **Tenant-wide inventory (5 tools).** Every agent, app, flow, environment and connector in the tenant in one query: "how many agents were created this week, by whom, in which environments", "published agents nobody has used for 90 days", "every flow using SharePoint". Raw KQL over Azure Resource Graph when you need it, and a background job that runs one Dataverse query in every environment.
 - **Power Platform administration (4 tools).** Environments, Copilot Studio agents per environment, quarantine or reassign an agent, describe any Dataverse table.
 - **The runbook (10 tools).** `search_operations` over a catalog of about 55,000 operations (Microsoft Graph v1.0 and beta, Azure Resource Manager, Power Platform API, Fabric, Dataverse, Power BI, legacy Power Platform admin, Office 365 Management), `describe_operation` for parameters and permissions, `invoke` to run it, plus paging, async polling, catalog status and changes, audit, a `doctor`, and `my_access`, which tells each admin what they can and cannot do here and why.

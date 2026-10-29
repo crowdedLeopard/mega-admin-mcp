@@ -64,6 +64,7 @@ class AuthMiddleware:
             await send({"type": "http.response.body", "body": body})
             return
         token = set_principal(principal)
+        broker.note_user_token(principal)  # background jobs for this admin use the freshest token
         budget_token = budget.start(settings.tool_time_budget_seconds)
         try:
             await self.app(scope, receive, send)

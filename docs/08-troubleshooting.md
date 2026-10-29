@@ -6,7 +6,7 @@ Start with `doctor`. Ask the agent to run it, or call it from any MCP client. It
 
 **The wizard cannot reach the server / "could not connect".** Open `https://<app>.azurewebsites.net/health` in a browser. If it does not answer, the App Service is not running: check the deployment log in the portal (Deployment Center) and the startup command (`python run.py`). If `/health` works but `/ready` says degraded, read the `configuration_problems` list.
 
-**No tools listed, or fewer tools than expected.** Copilot Studio drops tools whose input schema it cannot handle. All 38 tools use flat primitive parameters on purpose; if you changed a tool signature, keep to string, integer, number and boolean with defaults. The CI test `test_tool_schemas_are_copilot_studio_safe` guards this.
+**No tools listed, or fewer tools than expected.** Copilot Studio drops tools whose input schema it cannot handle. All 39 tools use flat primitive parameters on purpose; if you changed a tool signature, keep to string, integer, number and boolean with defaults. The CI test `test_tool_schemas_are_copilot_studio_safe` guards this.
 
 **Sign-in loop or AADSTS50011 (reply URL mismatch).** The redirect URL from the wizard is not on the app registration. Run `./scripts/setup-entra.ps1 -AppId <client id> -AddRedirectUri "<url>"` and sign in again.
 
@@ -45,6 +45,8 @@ Start with `doctor`. Ask the agent to run it, or call it from any MCP client. It
 **A KQL error from `resource_graph_query`.** The message carries the parser's line, position and token. Cast property values (`tostring(properties.displayName)`, `todatetime(properties.createdAt)`), and remember `count` is a reserved word: name a summary column something else.
 
 **`Unknown job` from `job_status`.** Jobs are kept in memory for 24 hours on the instance that ran them. A restart or a second instance will not know the id; start the job again.
+
+**A long job reports "On-behalf-of exchange failed" for part of its work, or names missing at the end.** Before 1.3.0 a background job kept the sign-in token of the request that started it, and that token expires about an hour after Copilot Studio obtained it. My first twelve-month credits scan lost 19% of its breakdown that way. Since 1.3.0 every request from the same admin (each `job_status` poll included) hands the server a fresh token, jobs always use the newest one, and a job that hits an expired token waits up to four minutes for the next poll and carries on. If you still see it, the agent stopped polling: call `job_status`, then run the tool again with `refresh=true`. Incomplete credit scans are not cached.
 
 **Background job lists many `not_a_member` failures.** You are not a user in those environments, so Dataverse refuses. Add yourself in the admin centre, accept the gap, or use the inventory tools, which do not need environment membership.
 

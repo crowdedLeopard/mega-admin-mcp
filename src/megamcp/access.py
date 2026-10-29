@@ -63,6 +63,7 @@ TOOL_NEEDS: dict[str, Need] = {
     "finops_environment_credits": Need("Copilot Credits for an environment", PP_ADMIN),
     "finops_allocate_copilot_credits": Need("Copilot Credit allocation", ["Power Platform Administrator", "Dynamics 365 Administrator", "Global Administrator"]),
     "finops_agent_limits": Need("per-agent Copilot Credit limits", PP_ADMIN),
+    "finops_agent_credits_history": Need("Copilot Credits spend history per agent", PP_ADMIN),
     "finops_set_agent_limit": Need("changing per-agent Copilot Credit limits", PP_ADMIN),
     "finops_billing_plans": Need("pay-as-you-go billing plans", PP_ADMIN, azure="Cost Management Reader (or Reader) on the linked subscriptions for the cost figures"),
     "finops_link_environment_billing_plan": Need("linking environments to billing plans", PP_ADMIN, azure="Contributor on the billing plan's resource group"),

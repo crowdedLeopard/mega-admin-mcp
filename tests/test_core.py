@@ -331,3 +331,108 @@ def test_directory_roles_named_from_template_ids_on_core_tier():
     ]
     assert directory_role_names(members) == ["Entra role 00000000-1111-2222-3333-444444444444", "Global Reader",
                                              "Power Platform Administrator", "Security Administrator"]
+
+
+def test_credits_history_period_aggregation_and_views():
+    import datetime as dt
+    from megamcp.tools import credits_history as ch
+
+    today = dt.date(2026, 10, 29)
+    assert ch.period(6, "", "", today) == ("2026-04-29", "2026-10-29")
+    assert ch.period(12, "", "", today) == ("2025-10-29", "2026-10-29")
+    assert ch.period(1, "", "", dt.date(2026, 3, 31)) == ("2026-02-28", "2026-03-31")
+    assert ch.period(6, "2026-05-01", "2026-05-31", today) == ("2026-05-01", "2026-05-31")
+    for bad in ((0, "", ""), (25, "", ""), (6, "2026-06-01", "2026-05-01"), (6, "May", "")):
+        try:
+            ch.period(*bad, today)
+            raise AssertionError(f"expected ValueError for {bad}")
+        except ValueError:
+            pass
+    months = ch.month_windows("2026-04-29", "2026-10-29")
+    assert [m[0] for m in months] == ["2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09", "2026-10"]
+    assert months[0][1:] == ("2026-04-29", "2026-04-30") and months[-1][1:] == ("2026-10-01", "2026-10-29")
+
+    agg = ch.new_aggregate()
+    ch.add_users(agg, [
+        {"userId": "u1", "consumed": 120.0, "metadata": {"Resources": 2, "NonBillableQuantity": 5.0}, "asOfDate": "2026-10-28T00:00:00"},
+        {"userId": "u2", "consumed": 30.0, "metadata": {"Resources": 1, "NonBillableQuantity": 0.0}, "asOfDate": "2026-09-02T00:00:00"},
+    ])
+    a1, a2 = "11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"
+    ch.add_user_resources(agg, "u1", [
+        {"resourceId": a1, "environmentId": "env-a", "consumed": 100.0, "metadata": {"ResourceName": "AI Pulse", "FeatureName": "Generative answer"}, "asOfDate": "2026-10-20T00:00:00"},
+        {"resourceId": a1, "environmentId": "env-a", "consumed": 10.0, "metadata": {"ResourceName": "AI Pulse", "FeatureName": "Agent action", "NonBillableQuantity": 5.0}, "asOfDate": "2026-10-28T00:00:00"},
+        {"resourceId": a2, "environmentId": "env-b", "consumed": 10.0, "metadata": {"ResourceName": "Helpdesk"}, "asOfDate": "2026-10-01T00:00:00"},
+    ])
+    ch.add_user_resources(agg, "u2", [{"resourceId": a2, "environmentId": "env-b", "consumed": 30.0, "metadata": {"ResourceName": "Helpdesk", "FeatureName": "Classic answer"}}])
+    agg["names"] = {"environments": {"env-a": "Contoso Prod", "env-b": "Contoso Dev"},
+                    "agents": {a1: {"created_by": "c1", "creator_name": "Ada <ada@contoso.com>"}}, "users": {"u1": {"name": "Ada", "upn": "ada@contoso.com"}}}
+
+    by_agent = ch.render(agg, "agent", 10)
+    assert by_agent["totals"] == {"billed_credits": 150.0, "non_billable_credits": 5.0, "agents_with_billed_usage": 2, "agents_with_any_usage": 2, "users_with_usage": 2}
+    top = by_agent["rows"][0]
+    assert top["agent"] == "AI Pulse" and top["environment"] == "Contoso Prod" and top["creator"] == "Ada <ada@contoso.com>"
+    assert top["billed_credits"] == 110.0 and top["top_features"][0] == "Generative answer" and top["last_activity"] == "2026-10-28"
+    assert by_agent["coverage"]["attributed_percent"] == 100.0
+
+    by_env = ch.render(agg, "environment", 10)
+    assert [r["environment"] for r in by_env["rows"]] == ["Contoso Prod", "Contoso Dev"] and by_env["rows"][1]["top_agents"] == ["Helpdesk"]
+    assert by_env["rows"][0]["agents_billed"] == 1 and by_env["rows"][0]["agents_any_usage"] == 1
+    by_creator = ch.render(agg, "creator", 10)
+    assert {r["creator"] for r in by_creator["rows"]} == {"Ada <ada@contoso.com>", "(first-party or deleted agent)"}
+    by_user = ch.render(agg, "user", 10, include_non_billable=False)
+    assert by_user["rows"][0] == {"user": "Ada <ada@contoso.com>", "user_id": "u1", "billed_credits": 120.0, "agents_used": 2, "last_activity": "2026-10-28"}
+    assert ch.render(agg, "feature", 1)["rows"] == [{"feature": "Generative answer", "billed_credits": 100.0, "non_billable_credits": 0.0}]
+    only_dev = ch.render(agg, "agent", 10, environment="dev")
+    assert [r["agent"] for r in only_dev["rows"]] == ["Helpdesk"] and only_dev["totals"]["billed_credits"] == 40.0
+
+
+def test_credits_history_first_party_agent_split_by_environment():
+    from megamcp.tools import credits_history as ch
+
+    agg = ch.new_aggregate()
+    ch.add_users(agg, [{"userId": "u1", "consumed": 30.0, "metadata": {}}])
+    ch.add_user_resources(agg, "u1", [
+        {"resourceId": "Sales Opportunity Agent", "environmentId": "env-a", "consumed": 20.0, "metadata": {"ResourceName": "Sales Opportunity Agent"}},
+        {"resourceId": "Sales Opportunity Agent", "environmentId": "env-b", "consumed": 10.0, "metadata": {"ResourceName": "Sales Opportunity Agent"}},
+    ])
+    rows = ch.render(agg, "agent", 10)["rows"]
+    assert [(r["environment"], r["billed_credits"]) for r in rows] == [("env-a", 20.0), ("env-b", 10.0)]
+    assert all(r["agent_id"] == "Sales Opportunity Agent" for r in rows)
+
+
+def test_background_jobs_use_the_freshest_user_token():
+    import time as _t
+    from megamcp.auth.entra import Principal
+    from megamcp.auth.tokens import TokenBroker, TokenError
+    from megamcp.config import settings
+
+    b = TokenBroker()
+    old = Principal(mode="delegated", oid="admin-1", raw_token="old-token", claims={"exp": _t.time() - 60})
+    new = Principal(mode="delegated", oid="admin-1", raw_token="new-token", claims={"exp": _t.time() + 3000})
+    assert b.assertion_valid_for(old) < 0
+    b.note_user_token(new)
+    assert b.freshest_assertion(old) == (new.claims["exp"], "new-token") and b.assertion_valid_for(old) > 2900
+    b.note_user_token(old)  # an older token never replaces a newer one
+    assert b.freshest_assertion(old)[1] == "new-token"
+
+    seen = {}
+
+    class FakeApp:
+        def acquire_token_on_behalf_of(self, user_assertion, scopes):
+            seen["assertion"] = user_assertion
+            return {"access_token": "downstream", "expires_in": 3600}
+
+    b._msal_app = FakeApp()
+    saved = settings.auth_mode
+    settings.auth_mode = "delegated"
+    try:
+        assert b._acquire("https://api.powerplatform.com/.default", old)[0] == "downstream" and seen["assertion"] == "new-token"
+        lonely = Principal(mode="delegated", oid="admin-2", raw_token="expired", claims={"exp": _t.time() - 5})
+        try:
+            b._acquire("https://api.powerplatform.com/.default", lonely)
+            raise AssertionError("expected TokenError")
+        except TokenError as e:
+            assert e.to_dict()["user_token_expired"] is True
+    finally:
+        settings.auth_mode = saved
+    assert b.assertion_valid_for(Principal(mode="none")) == float("inf")

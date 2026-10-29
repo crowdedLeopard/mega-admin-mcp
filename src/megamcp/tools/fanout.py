@@ -116,12 +116,13 @@ def register(mcp: MCPServer) -> None:
             envs = await runbook.paged("powerplatform", "/environmentmanagement/environments", api_version=settings.powerplatform_api_version, max_pages=40)
         except RunbookError as e:
             return e.result
-        targets = [e for e in envs if isinstance(e, dict) and e.get("url")]
-        no_dataverse = len(envs) - len(targets)
+        matching = [e for e in envs if isinstance(e, dict)]
         if environment_filter.strip():
-            targets = [e for e in targets if environment_filter.strip().lower() in (e.get("displayName") or "").lower()]
+            matching = [e for e in matching if environment_filter.strip().lower() in (e.get("displayName") or "").lower()]
         if etype not in ("", "any"):
-            targets = [e for e in targets if str(e.get("type") or "").lower() == etype]
+            matching = [e for e in matching if str(e.get("type") or "").lower() == etype]
+        targets = [e for e in matching if e.get("url")]
+        no_dataverse = len(matching) - len(targets)  # matching environments that have no Dataverse database
         cap = max(1, min(int(max_environments), 2000))
         capped = max(0, len(targets) - cap)
         targets = targets[:cap]

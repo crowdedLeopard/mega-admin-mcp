@@ -16,14 +16,16 @@ FinOps is not a feature here, it is the point. The headline tools answer Copilot
 
 ## What it does
 
-**37 tools, four kinds.**
+**38 tools, four kinds.**
 
 - **FinOps and tokenomics (18 tools).** Copilot Credits purchased, allocated and consumed, per tenant and per environment. Allocate credits and set per-agent monthly limits. Billing plans joined to their Azure cost. Microsoft 365 Copilot licence waste. Azure OpenAI inventory, tokens per deployment, cost per meter, effective price per million tokens, list price comparison, quota headroom, budgets and alerts.
 - **Tenant-wide inventory (5 tools).** Every agent, app, flow, environment and connector in the tenant in one query: "how many agents were created this week, by whom, in which environments", "published agents nobody has used for 90 days", "every flow using SharePoint". Raw KQL over Azure Resource Graph when you need it, and a background job that runs one Dataverse query in every environment.
 - **Power Platform administration (4 tools).** Environments, Copilot Studio agents per environment, quarantine or reassign an agent, describe any Dataverse table.
-- **The runbook (10 tools).** `search_operations` over a catalog of about 55,000 operations (Microsoft Graph v1.0 and beta, Azure Resource Manager, Power Platform API, Fabric, Dataverse, Power BI, legacy Power Platform admin, Office 365 Management), `describe_operation` for parameters and permissions, `invoke` to run it, plus paging, async polling, catalog status and changes, audit and a `doctor`.
+- **The runbook (10 tools).** `search_operations` over a catalog of about 55,000 operations (Microsoft Graph v1.0 and beta, Azure Resource Manager, Power Platform API, Fabric, Dataverse, Power BI, legacy Power Platform admin, Office 365 Management), `describe_operation` for parameters and permissions, `invoke` to run it, plus paging, async polling, catalog status and changes, audit, a `doctor`, and `my_access`, which tells each admin what they can and cannot do here and why.
 
 **Every call is as the signed-in admin.** Copilot Studio signs you in to the server's own app registration; the server exchanges that token on-behalf-of you for Graph, Azure, the Power Platform API, Dataverse or Power BI. No standing credentials, no service account with God rights. A reader stays a reader.
+
+**Straight answers when you don't have access.** If a call is refused, the agent says so kindly and confirms why: the role, app permission, consent or Azure role that is missing, what your account actually holds, and who can grant it. It does not retry or look for a way round. Write previews warn you before you confirm something that will be refused.
 
 **Writes are previewed.** POST, PUT, PATCH and DELETE return a preview until the agent calls again with `confirm=true`, which it is instructed to do only after you say yes. `READ_ONLY=true` switches writes off completely.
 
@@ -58,7 +60,7 @@ Then ask the agent: *"Give me the Copilot Credits position and tell me what you 
 | [04 FinOps playbook](docs/04-finops-playbook.md) | Every FinOps tool, where its numbers come from, the prompts I use, a monthly review |
 | [05 The runbook](docs/05-runbook-any-rest-call.md) | search, describe, invoke; services; writes and confirm; paging; what happens on failure |
 | [06 Self-updating and self-healing](docs/06-self-updating-and-self-healing.md) | The daily catalog pipeline and its guards; every healing behaviour; the limits |
-| [07 Security and permissions](docs/07-security-and-permissions.md) | Identity model, safety policy, audit, hardening, what the server will never do |
+| [07 Security and permissions](docs/07-security-and-permissions.md) | Identity model, safety policy, access explanations, audit, hardening, what the server will never do |
 | [08 Troubleshooting](docs/08-troubleshooting.md) | The errors you will meet and what to do |
 | [09 Tenant-wide inventory](docs/09-tenant-inventory.md) | Agents, apps and flows across the whole tenant in one call, last-used data, raw KQL, background jobs across every environment |
 

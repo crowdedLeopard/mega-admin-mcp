@@ -198,3 +198,79 @@ def test_job_store_runs_and_isolates_users():
         assert j2.status == "cancelled"
 
     asyncio.run(scenario())
+
+
+def _offline_access(monkey_roles):
+    """Patch the access module's network lookups with fixed answers."""
+    from megamcp import access
+
+    async def facts(principal=None, force=False):
+        return {"roles": monkey_roles, "object_id": "11111111-2222-3333-4444-555555555555", "upn": "admin@contoso.com", "error": ""}
+
+    async def scopes(service_name, principal=None):
+        return ["User.Read", "User.ReadBasic.All"] if service_name == "graph" else []
+
+    async def az_roles(subscription_id, object_id, principal=None):
+        return ["Reader"]
+
+    access.caller_facts, access.granted_scopes, access.azure_roles_at = facts, scopes, az_roles
+    return access
+
+
+def test_access_explains_missing_consent_role_and_azure_rbac():
+    access = _offline_access(["AI Administrator", "Global Reader"])
+
+    async def scenario():
+        graph = {"status": 403, "ok": False, "service": "graph", "method": "GET",
+                 "url": "https://graph.microsoft.com/v1.0/reports/getMicrosoft365CopilotUsageUserDetail(period='D30')",
+                 "body": {"error": {"code": "S2SUnauthorized", "message": "Invalid permission."}}}
+        a = await access.classify(graph, "finops_m365_copilot_licences")
+        assert a["kind"] == "app_permission_missing" and "consent" in a["who_can_fix"].lower()
+        assert a["user_message"].startswith("Sorry, you don't have access to Microsoft 365 Copilot licence")
+
+        pp = {"status": 403, "ok": False, "service": "powerplatform", "method": "PUT",
+              "url": "https://api.powerplatform.com/licensing/allocationsV2?api-version=2024-10-01", "body": {"error": {"code": "Forbidden", "message": "Forbidden"}}}
+        b = await access.classify(pp, "finops_allocate_copilot_credits")
+        assert b["kind"] == "role_missing" and b["confirmed"] is True
+        assert b["your_roles"] == ["AI Administrator", "Global Reader"] and "Power Platform Administrator" in b["missing"]
+
+        arm = {"status": 403, "ok": False, "service": "arm", "method": "PUT",
+               "url": "https://management.azure.com/subscriptions/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/providers/Microsoft.Consumption/budgets/b1",
+               "body": {"error": {"code": "AuthorizationFailed", "message": "The client 'admin@contoso.com' with object id 'x' does not have authorization to perform action "
+                                  "'Microsoft.Consumption/budgets/write' over scope '/subscriptions/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' or the scope is invalid."}}}
+        c = await access.classify(arm, "finops_create_budget")
+        assert c["kind"] == "azure_rbac_missing" and "Cost Management Contributor" in c["missing"]
+        assert c["your_azure_roles_on_subscription"] == ["Reader"]
+
+        blocked = {"status": "blocked", "reason": "server is in READ_ONLY mode; write operations are disabled"}
+        d = await access.classify(blocked, "invoke")
+        assert d["kind"] == "server_policy" and "switched off on this server" in d["user_message"]
+
+        dv = {"status": 401, "url": "https://org1.crm.dynamics.com/api/data/v9.2/bots", "message": "The user is not a member of the organization."}
+        e = await access.classify(dv, "pp_query_all_environments")
+        assert e["kind"] == "environment_membership" and "org1.crm.dynamics.com" in e["reason"]
+
+    asyncio.run(scenario())
+
+
+def test_access_enrich_marks_denied_and_partial():
+    access = _offline_access(["Global Reader"])
+
+    async def scenario():
+        denied = await access.enrich("pp_agents_tenant", {"ok": False, "error": "inventory_query_failed",
+                                                          "attempts": [{"route": "azure_resource_graph", "service": "arm", "status": 403, "message": "Forbidden"}]})
+        assert denied["access_denied"] is True and denied["access"]["kind"] == "role_missing"
+        partial = await access.enrich("finops_billing_plans", {"ok": True, "plans": [{"name": "p1", "azure_cost": {"status": 403, "service": "arm", "url": "https://management.azure.com/subscriptions/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/providers/Microsoft.CostManagement/query", "message": "denied"}}]})
+        assert partial["access_partial"] is True and partial["access"]["user_message"].startswith("Part of this answer is missing")
+        fine = await access.enrich("pp_environments", {"ok": True, "environments": []})
+        assert "access_denied" not in fine and "access_partial" not in fine
+        assert await access.enrich("whoami", {"status": 403}) == {"status": 403}
+
+    asyncio.run(scenario())
+
+
+def test_every_tool_is_wrapped_for_access_explanations():
+    server = create_server()
+    tools = server._tool_manager.list_tools()
+    assert all(getattr(t.fn, "_megamcp_wrapped", False) for t in tools)
+    assert any(t.name == "my_access" for t in tools)

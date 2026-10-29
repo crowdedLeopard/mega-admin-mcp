@@ -27,6 +27,27 @@ Consequences: the server has no standing access to anything. If the admin loses 
 - The tenant-wide inventory tools are read-only and respect the inventory's Entra role model: Power Platform Administrator and Global Reader see everything, AI Administrator sees agents only. `resource_graph_query` runs KQL, which cannot change anything. `pp_query_all_environments` only ever sends GET.
 - Background jobs run as the admin who started them, with that admin's delegated token, and only that admin can see or cancel them.
 
+## When you don't have access
+
+Admins ask agents for things they are not allowed to do all the time, usually without knowing it. A bare "403 Forbidden" helps nobody, and an agent that quietly tries five other tools to get round it is worse. So every tool result goes through one check: if any call was refused for access reasons, the result carries `access_denied` (nothing came back) or `access_partial` (some of it did), plus an explanation the agent is told to relay kindly and without retrying.
+
+The explanation says what you were trying to do, why it was refused, exactly what is missing, what your account has, and who can fix it. Where the server can confirm the cause it does, rather than guessing:
+
+| Cause | How it is confirmed | Who can fix it |
+| --- | --- | --- |
+| Missing Entra role (for example Power Platform Administrator for Copilot Credit allocation) | Your active directory roles, read from Graph `/me/transitiveMemberOf` (needs only User.Read) | A Global Administrator or Privileged Role Administrator, or you, by activating an eligible role in PIM |
+| The app was never granted the permission (for example Reports.Read.All for Copilot usage reports) | The scopes actually present in your Graph token, against the permission the operation needs in the catalog | A Global Administrator, Privileged Role Administrator or Cloud Application Administrator (admin consent) |
+| Missing Azure role (for example Cost Management Contributor to create a budget) | Azure's own message names the action and scope; the server lists your role assignments on that subscription | An Owner or User Access Administrator on the subscription |
+| Not a user in a Dataverse environment, or a missing Dataverse privilege | Dataverse's message (the privilege name, such as prvReadBot, is quoted) | A Power Platform Administrator or the environment's System Administrator |
+| Conditional Access, MFA, not assigned to the app, consent not given | The Entra error code from the token exchange | You (sign in again) or your Conditional Access or application administrator |
+| This server's own policy (READ_ONLY, ALLOW_PATTERNS, DENY_PATTERNS) | The server's configuration | Whoever runs the server; nothing is wrong with your account |
+
+If you already hold a role that normally allows the action, the explanation says so and points at the narrower causes (a role scoped to an administrative unit, a PIM role that is eligible but not active, a resource-level restriction) instead of telling you to get a role you already have.
+
+Write previews get the same treatment before you confirm: if the change needs a Graph permission the app does not have, or a role you do not hold (User Administrator to create users, Power Platform Administrator for credit allocation), the preview carries `access_precheck` and the agent warns you first.
+
+**`my_access`** answers the question before it is asked: your active roles, the permissions the app holds for you in Graph, Azure, the Power Platform API and Power BI, your Azure roles on up to eight subscriptions, and every capability of the server marked available, limited or unavailable with the reason and who can grant it. `whoami` shows your roles too. Roles you are only eligible for in Privileged Identity Management are not counted until you activate them.
+
 ## Audit
 
 `audit_recent` returns the last `AUDIT_LOG_SIZE` calls (default 500): timestamp, admin, method, URL, status, duration, whether it was a write, and what self-healing did. Each entry is also written as a JSON log line to stdout, which App Service captures and which you can ship to Log Analytics with a diagnostic setting. Combine it with the Microsoft side logs for a complete trail.

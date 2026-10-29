@@ -28,10 +28,14 @@ def register(mcp: MCPServer) -> None:
     async def whoami() -> dict[str, Any]:
         p = current_principal()
         services = {k: {"title": v.title, "base_url": v.base_url or "per environment", "notes": v.notes} for k, v in SERVICES.items()}
+        from ..access import caller_facts
+        facts = await caller_facts(p)
         return {
             "ok": True,
             "server": {"name": "Mega Admin MCP", "version": __version__, "uptime_seconds": int(time.time() - STARTED)},
             "caller": p.summary(),
+            "your_entra_roles": facts.get("roles") if facts.get("roles") is not None else f"could not be read ({facts.get('error')})",
+            "access_tip": "Call my_access for a full list of what you can and cannot do here, and why.",
             "policy": policy.describe(),
             "catalog_operations": len(catalog.ops),
             "services": services,

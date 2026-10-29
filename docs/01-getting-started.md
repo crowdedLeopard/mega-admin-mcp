@@ -62,7 +62,7 @@ Option C is a container: `ghcr.io/crowdedleopard/mega-admin-mcp:latest`, same en
 
 6. Back in the wizard select Next, create a new connection, sign in (you consent to the permissions once), then Add to agent.
 
-The agent now lists 37 tools. Full walkthrough with what every screen looks like in [03-copilot-studio.md](03-copilot-studio.md).
+The agent now lists 38 tools. Full walkthrough with what every screen looks like in [03-copilot-studio.md](03-copilot-studio.md).
 
 ## Step 4. Ask it something
 

@@ -6,7 +6,7 @@ Start with `doctor`. Ask the agent to run it, or call it from any MCP client. It
 
 **The wizard cannot reach the server / "could not connect".** Open `https://<app>.azurewebsites.net/health` in a browser. If it does not answer, the App Service is not running: check the deployment log in the portal (Deployment Center) and the startup command (`python run.py`). If `/health` works but `/ready` says degraded, read the `configuration_problems` list.
 
-**No tools listed, or fewer tools than expected.** Copilot Studio drops tools whose input schema it cannot handle. All 37 tools use flat primitive parameters on purpose; if you changed a tool signature, keep to string, integer, number and boolean with defaults. The CI test `test_tool_schemas_are_copilot_studio_safe` guards this.
+**No tools listed, or fewer tools than expected.** Copilot Studio drops tools whose input schema it cannot handle. All 38 tools use flat primitive parameters on purpose; if you changed a tool signature, keep to string, integer, number and boolean with defaults. The CI test `test_tool_schemas_are_copilot_studio_safe` guards this.
 
 **Sign-in loop or AADSTS50011 (reply URL mismatch).** The redirect URL from the wizard is not on the app registration. Run `./scripts/setup-entra.ps1 -AppId <client id> -AddRedirectUri "<url>"` and sign in again.
 

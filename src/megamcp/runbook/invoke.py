@@ -191,6 +191,12 @@ class Runbook:
             }
             if decision.get("needs_confirm"):
                 preview["next_step"] = "Show this preview to the admin. If they approve, call the same tool again with confirm=true."
+                from ..access import precheck_write  # late import: access imports the runbook lazily too
+                pre = await precheck_write(svc.name, method, url, principal)
+                if pre:
+                    preview["access_precheck"] = pre
+                    preview["next_step"] = ("Tell the admin kindly that this will probably be refused and why (access_precheck.message) before asking them to confirm. "
+                                            "If they still want to try, call again with confirm=true.")
             audit.record({"user": principal.upn or principal.name, "method": method, "url": url, "status": preview["status"], "write": True})
             return preview
 

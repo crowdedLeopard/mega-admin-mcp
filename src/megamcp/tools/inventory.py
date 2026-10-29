@@ -263,7 +263,8 @@ async def run_query(q: Query, top: int = 100, skip_token: str = "") -> dict[str,
             nxt = b.get("$skipToken") or b.get("skipToken")
             return {"ok": True, "source": "azure_resource_graph", "rows": b.get("data") or [], "total": b.get("totalRecords"),
                     "skip_token": f"arg:{nxt}" if nxt else ""}
-        attempts.append({"route": "azure_resource_graph", "status": r.get("status"), "message": r.get("message") or r.get("error")})
+        attempts.append({"route": "azure_resource_graph", "service": "arm", "url": r.get("url", ""), "status": r.get("status"),
+                         "message": r.get("message") or r.get("error"), **({k: r[k] for k in ("error", "aad_error", "description", "suberror", "scope", "claims_challenge", "fix", "admin_consent_url") if k in r})})
     if not q.kql_only and route in ("", "pp", "arg"):
         options = {"Top": top}
         if token and route == "pp":
@@ -276,7 +277,8 @@ async def run_query(q: Query, top: int = 100, skip_token: str = "") -> dict[str,
             nxt = b.get("skipToken") or b.get("$skipToken")
             return {"ok": True, "source": "power_platform_inventory_api", "rows": b.get("data") or [], "total": b.get("totalRecords"),
                     "skip_token": f"pp:{nxt}" if nxt else ""}
-        attempts.append({"route": "power_platform_inventory_api", "status": r.get("status"), "message": r.get("message") or r.get("error")})
+        attempts.append({"route": "power_platform_inventory_api", "service": "powerplatform", "url": r.get("url", ""), "status": r.get("status"),
+                         "message": r.get("message") or r.get("error"), **({k: r[k] for k in ("error", "aad_error", "description", "suberror", "scope", "claims_challenge", "fix", "admin_consent_url") if k in r})})
     return {"ok": False, "error": "inventory_query_failed", "attempts": attempts, "kql": q.kql(), "hints": [ROLE_HINT]}
 
 

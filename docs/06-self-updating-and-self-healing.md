@@ -25,7 +25,7 @@ The server does not hard-code operations. It loads a catalog, and the catalog is
 
 At runtime the server starts from the catalog bundled in the package, then every `CATALOG_REFRESH_HOURS` (default 24) downloads the latest release (`CATALOG_URL`, with ETag so unchanged files cost nothing). It applies the same 30% shrink guard before swapping, and never replaces a newer catalog with an older one. `catalog_status` shows what is loaded, from where, and the last refresh result; `catalog_status refresh_now=true` pulls immediately; `catalog_changes days=7` lists what Microsoft added or removed.
 
-What this does not do: it does not change the 37 tool definitions. Copilot Studio reads the tool list when you add the server and the tools are stable on purpose. New Microsoft operations arrive through `search_operations` and `invoke`, which is exactly where you want them.
+What this does not do: it does not change the 38 tool definitions. Copilot Studio reads the tool list when you add the server and the tools are stable on purpose. New Microsoft operations arrive through `search_operations` and `invoke`, which is exactly where you want them.
 
 If you fork the repository, change `CATALOG_URL` and `CHANGELOG_URL` to your fork's releases. If you would rather not pull from the internet at all, set `CATALOG_AUTO_REFRESH=false` and redeploy when you want a new catalog; the package always ships the latest one at build time.
 

@@ -6,13 +6,29 @@ on:
     paths-ignore: ["docs/**", "*.md"]
   pull_request:
   workflow_dispatch:
+  schedule:
+    - cron: "41 5 * * 1" # weekly: does the code still work with the newest versions of its dependencies?
 
 permissions:
   contents: read
   packages: write
 
 jobs:
+  newest-dependencies:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install the newest versions pyproject.toml allows
+        run: pip install -e ".[dev]"
+      - name: Unit tests
+        run: pytest -q
+
   test:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -22,8 +38,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Install
-        run: pip install -e ".[dev]"
+      - name: Install the pinned versions that deployments get
+        run: |
+          pip install -r requirements.txt
+          pip install -e ".[dev]"
       - name: Unit tests
         run: pytest -q
       - name: Start server (AUTH_MODE=none) and smoke test the MCP endpoint
@@ -41,26 +59,62 @@ jobs:
         run: |
           curl -sLo bicep https://github.com/Azure/bicep/releases/latest/download/bicep-linux-x64 && chmod +x bicep
           ./bicep build deploy/bicep/main.bicep --outfile /tmp/azuredeploy.json
-          diff <(python -c "import json;print(sorted(json.load(open('/tmp/azuredeploy.json'))['parameters']))") <(python -c "import json;print(sorted(json.load(open('deploy/azuredeploy.json'))['parameters']))") || echo "::warning::deploy/azuredeploy.json is out of date with main.bicep"
+          # The installer and the Deploy to Azure button use the compiled file, so a stale one breaks imports.
+          python - <<'EOF'
+          import json, sys
+          def shape(path):
+              d = json.load(open(path))
+              return sorted(d["parameters"]), sorted(d.get("outputs", {})), sorted(d.get("variables", {}))
+          if shape("/tmp/azuredeploy.json") != shape("deploy/azuredeploy.json"):
+              sys.exit("deploy/azuredeploy.json is out of date. Run: az bicep build -f deploy/bicep/main.bicep --outfile deploy/azuredeploy.json")
+          EOF
 
+  # The image is what people import, so it has to prove itself before it is published: no settings means no open door,
+  # and with settings it answers like the real thing.
   container:
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Image name (GHCR needs lowercase) and version
+        id: img
+        run: |
+          echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "version=$(grep -oP '__version__ = "\K[^"]+' src/megamcp/__init__.py)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: megamcp:test
+      - name: With no settings, the image refuses calls instead of running open
+        run: |
+          docker run -d --name bare -p 8001:8000 -e CATALOG_AUTO_REFRESH=false megamcp:test
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8001/health && break; sleep 2; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"ping"}' http://127.0.0.1:8001/mcp)" = "503"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8001/ready)" = "503"
+          curl -sf http://127.0.0.1:8001/setup | grep -q "TENANT_ID is required"
+          docker rm -f bare
+      - name: The image serves MCP
+        run: |
+          docker run -d --name local -p 8002:8000 -e AUTH_MODE=none -e CATALOG_AUTO_REFRESH=false megamcp:test
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8002/health && break; sleep 2; done
+          curl -sf http://127.0.0.1:8002/ready
+          python3 scripts/smoke_test.py --url http://127.0.0.1:8002/mcp
+          docker rm -f local
       - uses: docker/login-action@v3
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Image name (GHCR needs lowercase)
-        id: img
-        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           context: .
           push: true
           tags: |
             ${{ steps.img.outputs.name }}:latest
+            ${{ steps.img.outputs.name }}:${{ steps.img.outputs.version }}
             ${{ steps.img.outputs.name }}:${{ github.sha }}

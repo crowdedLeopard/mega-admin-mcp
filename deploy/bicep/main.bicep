@@ -1,5 +1,7 @@
-// Mega Admin MCP on Azure App Service (Linux, Python). One file, one command.
+// Mega Admin MCP on Azure App Service (Linux). scripts/install.ps1 runs this for you and does the Entra side as well.
 //   az deployment group create -g <rg> -f deploy/bicep/main.bicep -p appName=<unique> tenantId=<tid> clientId=<cid> clientSecret=<secret>
+// After a template change, rebuild the file the Deploy to Azure button and the installer use:
+//   az bicep build -f deploy/bicep/main.bicep --outfile deploy/azuredeploy.json
 targetScope = 'resourceGroup'
 
 @description('Globally unique App Service name, becomes https://<appName>.azurewebsites.net')
@@ -14,8 +16,8 @@ param location string = resourceGroup().location
 @allowed(['F1', 'B1', 'B2', 'B3', 'P0v3', 'P1v3', 'P2v3', 'P1mv3', 'S1'])
 param sku string = 'B1'
 
-@description('delegated (Copilot Studio OAuth, recommended) | apikey (server identity) | none (never on the internet)')
-@allowed(['delegated', 'apikey', 'none'])
+@description('delegated (Copilot Studio OAuth, recommended) | apikey (server identity)')
+@allowed(['delegated', 'apikey'])
 param authMode string = 'delegated'
 
 @description('Entra tenant id')
@@ -41,8 +43,11 @@ param readOnly bool = false
 @description('Default Azure subscription id for FinOps tools (optional)')
 param defaultSubscriptionId string = ''
 
-@description('Deploy the code straight from the public GitHub repository (Oryx build). Set false when you deploy a zip or container yourself.')
-param deployFromGitHub bool = true
+@description('Container image to run. Nothing to build, so nothing to fail at build time. Empty runs Python from source instead (see deployFromGitHub).')
+param containerImage string = 'ghcr.io/crowdedleopard/mega-admin-mcp:latest'
+
+@description('Only when containerImage is empty: build the code from the public GitHub repository (Oryx, six to eight minutes on B1). Set false when you deploy a zip yourself.')
+param deployFromGitHub bool = false
 
 @description('GitHub repository URL to deploy from')
 param repoUrl string = 'https://github.com/crowdedLeopard/mega-admin-mcp'
@@ -54,6 +59,14 @@ param branch string = 'main'
 param pythonVersion string = '3.13'
 
 var publicBaseUrl = 'https://${appName}.azurewebsites.net'
+var runsContainer = !empty(containerImage)
+var hostingSettings = runsContainer ? [
+  { name: 'WEBSITES_ENABLE_APP_SERVICE_STORAGE', value: 'true' } // keeps /home, and so the audit log, across restarts
+  { name: 'WEBSITES_CONTAINER_START_TIME_LIMIT', value: '600' }
+] : [
+  { name: 'SCM_DO_BUILD_DURING_DEPLOYMENT', value: 'true' }
+  { name: 'ENABLE_ORYX_BUILD', value: 'true' }
+]
 
 resource plan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: '${appName}-plan'
@@ -70,7 +83,10 @@ resource plan 'Microsoft.Web/serverfarms@2023-12-01' = {
 resource site 'Microsoft.Web/sites@2023-12-01' = {
   name: appName
   location: location
-  kind: 'app,linux'
+  kind: runsContainer ? 'app,linux,container' : 'app,linux'
+  tags: {
+    application: 'mega-admin-mcp'
+  }
   identity: {
     type: 'SystemAssigned'
   }
@@ -79,8 +95,8 @@ resource site 'Microsoft.Web/sites@2023-12-01' = {
     httpsOnly: true
     clientAffinityEnabled: false
     siteConfig: {
-      linuxFxVersion: 'PYTHON|${pythonVersion}'
-      appCommandLine: 'python run.py'
+      linuxFxVersion: runsContainer ? 'DOCKER|${containerImage}' : 'PYTHON|${pythonVersion}'
+      appCommandLine: runsContainer ? '' : 'python run.py'
       alwaysOn: sku != 'F1'
       ftpsState: 'Disabled'
       minTlsVersion: '1.2'
@@ -111,9 +127,7 @@ resource site 'Microsoft.Web/sites@2023-12-01' = {
           minProcessExecutionTime: '00:02:00'
         }
       }
-      appSettings: [
-        { name: 'SCM_DO_BUILD_DURING_DEPLOYMENT', value: 'true' }
-        { name: 'ENABLE_ORYX_BUILD', value: 'true' }
+      appSettings: concat(hostingSettings, [
         { name: 'WEBSITES_PORT', value: '8000' }
         { name: 'PORT', value: '8000' }
         { name: 'PYTHONDONTWRITEBYTECODE', value: '1' }
@@ -129,12 +143,12 @@ resource site 'Microsoft.Web/sites@2023-12-01' = {
         { name: 'CATALOG_AUTO_REFRESH', value: 'true' }
         { name: 'CATALOG_REFRESH_HOURS', value: '24' }
         { name: 'LOG_LEVEL', value: 'INFO' }
-      ]
+      ])
     }
   }
 }
 
-resource sourceControl 'Microsoft.Web/sites/sourcecontrols@2023-12-01' = if (deployFromGitHub) {
+resource sourceControl 'Microsoft.Web/sites/sourcecontrols@2023-12-01' = if (!runsContainer && deployFromGitHub) {
   parent: site
   name: 'web'
   properties: {
@@ -149,6 +163,7 @@ resource sourceControl 'Microsoft.Web/sites/sourcecontrols@2023-12-01' = if (dep
 output url string = publicBaseUrl
 output mcpEndpoint string = '${publicBaseUrl}/mcp'
 output healthEndpoint string = '${publicBaseUrl}/health'
+output setupPage string = '${publicBaseUrl}/setup'
 output connectorDefinition string = '${publicBaseUrl}/connector.yaml'
 output managedIdentityPrincipalId string = site.identity.principalId
-output nextSteps string = 'In Copilot Studio add an MCP tool with Server URL ${publicBaseUrl}/mcp, OAuth 2.0 Manual, scopes "${clientId}/.default offline_access" (GUID form, not api://; offline_access keeps the connection alive). Then add the wizard redirect URL to the app registration.'
+output nextSteps string = 'Open ${publicBaseUrl}/setup. It shows whether the server is ready and every value the Copilot Studio wizard asks for.'

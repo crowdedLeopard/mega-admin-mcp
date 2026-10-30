@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "6130493511808012377"
+      "templateHash": "9134321683315528131"
     }
   },
   "parameters": {
@@ -47,11 +47,10 @@
       "defaultValue": "delegated",
       "allowedValues": [
         "delegated",
-        "apikey",
-        "none"
+        "apikey"
       ],
       "metadata": {
-        "description": "delegated (Copilot Studio OAuth, recommended) | apikey (server identity) | none (never on the internet)"
+        "description": "delegated (Copilot Studio OAuth, recommended) | apikey (server identity)"
       }
     },
     "tenantId": {
@@ -102,11 +101,18 @@
         "description": "Default Azure subscription id for FinOps tools (optional)"
       }
     },
+    "containerImage": {
+      "type": "string",
+      "defaultValue": "ghcr.io/crowdedleopard/mega-admin-mcp:latest",
+      "metadata": {
+        "description": "Container image to run. Nothing to build, so nothing to fail at build time. Empty runs Python from source instead (see deployFromGitHub)."
+      }
+    },
     "deployFromGitHub": {
       "type": "bool",
-      "defaultValue": true,
+      "defaultValue": false,
       "metadata": {
-        "description": "Deploy the code straight from the public GitHub repository (Oryx build). Set false when you deploy a zip or container yourself."
+        "description": "Only when containerImage is empty: build the code from the public GitHub repository (Oryx, six to eight minutes on B1). Set false when you deploy a zip yourself."
       }
     },
     "repoUrl": {
@@ -132,7 +138,9 @@
     }
   },
   "variables": {
-    "publicBaseUrl": "[format('https://{0}.azurewebsites.net', parameters('appName'))]"
+    "publicBaseUrl": "[format('https://{0}.azurewebsites.net', parameters('appName'))]",
+    "runsContainer": "[not(empty(parameters('containerImage')))]",
+    "hostingSettings": "[if(variables('runsContainer'), createArray(createObject('name', 'WEBSITES_ENABLE_APP_SERVICE_STORAGE', 'value', 'true'), createObject('name', 'WEBSITES_CONTAINER_START_TIME_LIMIT', 'value', '600')), createArray(createObject('name', 'SCM_DO_BUILD_DURING_DEPLOYMENT', 'value', 'true'), createObject('name', 'ENABLE_ORYX_BUILD', 'value', 'true')))]"
   },
   "resources": [
     {
@@ -153,7 +161,10 @@
       "apiVersion": "2023-12-01",
       "name": "[parameters('appName')]",
       "location": "[parameters('location')]",
-      "kind": "app,linux",
+      "kind": "[if(variables('runsContainer'), 'app,linux,container', 'app,linux')]",
+      "tags": {
+        "application": "mega-admin-mcp"
+      },
       "identity": {
         "type": "SystemAssigned"
       },
@@ -162,8 +173,8 @@
         "httpsOnly": true,
         "clientAffinityEnabled": false,
         "siteConfig": {
-          "linuxFxVersion": "[format('PYTHON|{0}', parameters('pythonVersion'))]",
-          "appCommandLine": "python run.py",
+          "linuxFxVersion": "[if(variables('runsContainer'), format('DOCKER|{0}', parameters('containerImage')), format('PYTHON|{0}', parameters('pythonVersion')))]",
+          "appCommandLine": "[if(variables('runsContainer'), '', 'python run.py')]",
           "alwaysOn": "[not(equals(parameters('sku'), 'F1'))]",
           "ftpsState": "Disabled",
           "minTlsVersion": "1.2",
@@ -194,76 +205,7 @@
               "minProcessExecutionTime": "00:02:00"
             }
           },
-          "appSettings": [
-            {
-              "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",
-              "value": "true"
-            },
-            {
-              "name": "ENABLE_ORYX_BUILD",
-              "value": "true"
-            },
-            {
-              "name": "WEBSITES_PORT",
-              "value": "8000"
-            },
-            {
-              "name": "PORT",
-              "value": "8000"
-            },
-            {
-              "name": "PYTHONDONTWRITEBYTECODE",
-              "value": "1"
-            },
-            {
-              "name": "AUTH_MODE",
-              "value": "[parameters('authMode')]"
-            },
-            {
-              "name": "TENANT_ID",
-              "value": "[parameters('tenantId')]"
-            },
-            {
-              "name": "CLIENT_ID",
-              "value": "[parameters('clientId')]"
-            },
-            {
-              "name": "CLIENT_SECRET",
-              "value": "[parameters('clientSecret')]"
-            },
-            {
-              "name": "USE_MANAGED_IDENTITY_FIC",
-              "value": "[string(parameters('useManagedIdentityFederatedCredential'))]"
-            },
-            {
-              "name": "MCP_API_KEY",
-              "value": "[parameters('apiKey')]"
-            },
-            {
-              "name": "READ_ONLY",
-              "value": "[string(parameters('readOnly'))]"
-            },
-            {
-              "name": "DEFAULT_SUBSCRIPTION_ID",
-              "value": "[parameters('defaultSubscriptionId')]"
-            },
-            {
-              "name": "PUBLIC_BASE_URL",
-              "value": "[variables('publicBaseUrl')]"
-            },
-            {
-              "name": "CATALOG_AUTO_REFRESH",
-              "value": "true"
-            },
-            {
-              "name": "CATALOG_REFRESH_HOURS",
-              "value": "24"
-            },
-            {
-              "name": "LOG_LEVEL",
-              "value": "INFO"
-            }
-          ]
+          "appSettings": "[concat(variables('hostingSettings'), createArray(createObject('name', 'WEBSITES_PORT', 'value', '8000'), createObject('name', 'PORT', 'value', '8000'), createObject('name', 'PYTHONDONTWRITEBYTECODE', 'value', '1'), createObject('name', 'AUTH_MODE', 'value', parameters('authMode')), createObject('name', 'TENANT_ID', 'value', parameters('tenantId')), createObject('name', 'CLIENT_ID', 'value', parameters('clientId')), createObject('name', 'CLIENT_SECRET', 'value', parameters('clientSecret')), createObject('name', 'USE_MANAGED_IDENTITY_FIC', 'value', string(parameters('useManagedIdentityFederatedCredential'))), createObject('name', 'MCP_API_KEY', 'value', parameters('apiKey')), createObject('name', 'READ_ONLY', 'value', string(parameters('readOnly'))), createObject('name', 'DEFAULT_SUBSCRIPTION_ID', 'value', parameters('defaultSubscriptionId')), createObject('name', 'PUBLIC_BASE_URL', 'value', variables('publicBaseUrl')), createObject('name', 'CATALOG_AUTO_REFRESH', 'value', 'true'), createObject('name', 'CATALOG_REFRESH_HOURS', 'value', '24'), createObject('name', 'LOG_LEVEL', 'value', 'INFO')))]"
         }
       },
       "dependsOn": [
@@ -271,7 +213,7 @@
       ]
     },
     {
-      "condition": "[parameters('deployFromGitHub')]",
+      "condition": "[and(not(variables('runsContainer')), parameters('deployFromGitHub'))]",
       "type": "Microsoft.Web/sites/sourcecontrols",
       "apiVersion": "2023-12-01",
       "name": "[format('{0}/{1}', parameters('appName'), 'web')]",
@@ -300,6 +242,10 @@
       "type": "string",
       "value": "[format('{0}/health', variables('publicBaseUrl'))]"
     },
+    "setupPage": {
+      "type": "string",
+      "value": "[format('{0}/setup', variables('publicBaseUrl'))]"
+    },
     "connectorDefinition": {
       "type": "string",
       "value": "[format('{0}/connector.yaml', variables('publicBaseUrl'))]"
@@ -310,7 +256,7 @@
     },
     "nextSteps": {
       "type": "string",
-      "value": "[format('In Copilot Studio add an MCP tool with Server URL {0}/mcp, OAuth 2.0 Manual, scopes \"{1}/.default offline_access\" (GUID form, not api://; offline_access keeps the connection alive). Then add the wizard redirect URL to the app registration.', variables('publicBaseUrl'), parameters('clientId'))]"
+      "value": "[format('Open {0}/setup. It shows whether the server is ready and every value the Copilot Studio wizard asks for.', variables('publicBaseUrl'))]"
     }
   }
 }

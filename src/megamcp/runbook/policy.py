@@ -3,7 +3,7 @@
 - READ_ONLY=true turns the server into a pure observer.
 - ALLOW_PATTERNS / DENY_PATTERNS are regexes matched against "METHOD url".
 - Writes (POST, PUT, PATCH, DELETE) are previewed unless confirm=true.
-- Every call lands in an in-memory audit ring and a JSON log line.
+- Every call lands in an audit ring, a file under STATE_DIR and a JSON log line.
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import re
 import threading
 import time
 from collections import deque
+from pathlib import Path
 from typing import Any
 
 from ..config import settings
@@ -74,14 +75,58 @@ class Policy:
 
 
 class AuditLog:
+    MAX_FILE_BYTES = 20_000_000
+    KEEP_FILES = 5
+
     def __init__(self, size: int) -> None:
         self._ring: deque[dict[str, Any]] = deque(maxlen=size)
         self._lock = threading.Lock()
+        self._path: Path | None = None
+        self.persistence = "memory only (STATE_DIR not set)"
+
+    def attach(self, state_dir: str) -> None:
+        """Keep the log on disk and pick up what was there before the restart. Failure leaves it in memory; it never stops the server."""
+        if not state_dir:
+            return
+        try:
+            path = Path(state_dir) / "audit.jsonl"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a", encoding="utf-8"):
+                pass
+            with self._lock:
+                self._path = path
+                self.persistence = str(path)
+                with open(path, encoding="utf-8") as f:
+                    for line in f:
+                        try:
+                            self._ring.append(json.loads(line))
+                        except ValueError:
+                            continue  # a line cut short by a crash
+        except OSError as e:
+            self._path = None
+            self.persistence = f"memory only ({state_dir} is not writable: {e})"
+            log.warning("audit log stays in memory: %s", e)
+
+    def _write(self, entry: dict[str, Any]) -> None:
+        if not self._path:
+            return
+        try:
+            if self._path.stat().st_size > self.MAX_FILE_BYTES:
+                for i in range(self.KEEP_FILES - 1, 0, -1):
+                    older = self._path.with_suffix(f".jsonl.{i}")
+                    if older.exists():
+                        older.replace(self._path.with_suffix(f".jsonl.{i + 1}"))
+                self._path.replace(self._path.with_suffix(".jsonl.1"))
+            with open(self._path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, default=str) + "\n")
+        except OSError as e:
+            log.warning("audit entry not written to disk: %s", e)
 
     def record(self, entry: dict[str, Any]) -> None:
         entry = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **entry}
         with self._lock:
             self._ring.append(entry)
+            self._write(entry)
         try:
             log.info(json.dumps({"audit": entry}, default=str))
         except Exception:  # noqa: BLE001
@@ -103,7 +148,8 @@ class AuditLog:
         previews = sum(1 for i in items if i.get("status") == "preview")
         blocked = sum(1 for i in items if i.get("status") == "blocked")
         healed = sum(1 for i in items if i.get("healing"))
-        return {"recorded": total, "failures": failures, "writes_executed": writes, "write_previews": previews, "blocked": blocked, "self_healed": healed}
+        return {"recorded": total, "failures": failures, "writes_executed": writes, "write_previews": previews, "blocked": blocked, "self_healed": healed,
+                "stored_in": self.persistence}
 
 
 policy = Policy()

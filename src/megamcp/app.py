@@ -15,18 +15,20 @@ from typing import Any
 import uvicorn
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, PlainTextResponse, Response
+from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 
 from mcp.server.transport_security import TransportSecuritySettings
 
-from . import __version__
+from . import __version__, setup_page
 from .auth.entra import AuthError, principal_from_request_headers, protected_resource_metadata, set_principal
 from .auth.tokens import broker
 from .catalog.store import catalog
 from .config import settings
+from .diagnostics import connections
 from .runbook import budget
 from .runbook.invoke import runbook
+from .runbook.policy import audit
 from .server import create_server
 
 logging.basicConfig(level=getattr(logging, settings.log_level, logging.INFO), format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -48,6 +50,11 @@ class AuthMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):  # type: ignore[no-untyped-def]
+        # The commonest slip in the wizard is the site URL instead of /mcp, or a trailing slash. Both can only mean one thing.
+        if scope["type"] == "http" and scope.get("method") == "POST" and scope.get("path", "").rstrip("/") in ("", settings.mcp_path):
+            if scope["path"].rstrip("/") == "":
+                connections.wrong_url()
+            scope = {**scope, "path": settings.mcp_path, "raw_path": settings.mcp_path.encode()}
         if scope["type"] != "http" or not scope.get("path", "").startswith(settings.mcp_path):
             await self.app(scope, receive, send)
             return
@@ -55,14 +62,17 @@ class AuthMiddleware:
         try:
             principal = principal_from_request_headers(headers)
         except AuthError as e:
-            body = json.dumps({"error": "unauthorized", "message": str(e), **e.detail}).encode()
+            connections.refused(e.kind, str(e), e.fix, e.seen)
+            body = json.dumps({"error": "unauthorized" if e.status == 401 else "not_available", "message": str(e), **({"fix": e.fix} if e.fix else {}), **e.detail}).encode()
             www = 'Bearer realm="mega-admin-mcp"'
             if settings.public_base_url:
                 www += f', resource_metadata="{settings.public_base_url}/.well-known/oauth-protected-resource"'
-            await send({"type": "http.response.start", "status": e.status, "headers": [
-                (b"content-type", b"application/json"), (b"www-authenticate", www.encode())]})
+            resp_headers = [(b"content-type", b"application/json")]
+            resp_headers.append((b"www-authenticate", www.encode()) if e.status == 401 else (b"retry-after", b"60"))
+            await send({"type": "http.response.start", "status": e.status, "headers": resp_headers})
             await send({"type": "http.response.body", "body": body})
             return
+        connections.accepted()
         token = set_principal(principal)
         broker.note_user_token(principal)  # background jobs for this admin use the freshest token
         budget_token = budget.start(settings.tool_time_budget_seconds)
@@ -88,7 +98,23 @@ async def ready(_: Request) -> Response:
     return JSONResponse({"status": "ready" if ok else "degraded", "catalog_operations": len(catalog.ops),
                          "catalog_loaded_from": catalog.source, "configuration_problems": problems,
                          "server_credential": server_credential,
+                         "connections": connections.summary(), "audit_stored_in": audit.persistence, "setup_page": "/setup",
+                         "update_available": catalog.update_available(),
                          "auth_mode": settings.auth_mode, "version": __version__}, status_code=200 if ok else 503)
+
+
+async def setup(request: Request) -> Response:
+    problems = settings.validate()
+    cred = await asyncio.to_thread(broker.credential_check) if not problems else {"ok": False, "checked": False}
+    html = setup_page.render({
+        "base_url": settings.public_base_url or str(request.base_url).rstrip("/"),
+        "tenant_id": settings.tenant_id, "client_id": settings.client_id, "auth_mode": settings.auth_mode,
+        "problems": problems, "credential": cred, "operations": len(catalog.ops), "version": __version__,
+        "update_available": catalog.update_available(), "connections": connections.summary(),
+    }, dict(request.query_params))
+    return HTMLResponse(html, headers={
+        "cache-control": "no-store",
+        "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'"})
 
 
 async def prm(_: Request) -> Response:
@@ -136,10 +162,12 @@ security:
     return PlainTextResponse(yaml_text, media_type="application/x-yaml")
 
 
-async def index(_: Request) -> Response:
+async def index(request: Request) -> Response:
+    if "text/html" in request.headers.get("accept", ""):
+        return RedirectResponse("/setup", status_code=302)
     return JSONResponse({
         "name": "Mega Admin MCP", "version": __version__, "mcp_endpoint": settings.mcp_path, "auth_mode": settings.auth_mode,
-        "health": "/health", "ready": "/ready", "connector_definition": "/connector.yaml",
+        "setup": "/setup", "health": "/health", "ready": "/ready", "connector_definition": "/connector.yaml",
         "oauth_protected_resource": "/.well-known/oauth-protected-resource",
         "docs": "https://github.com/crowdedLeopard/mega-admin-mcp",
     })
@@ -150,6 +178,7 @@ async def lifespan(app: Starlette):
     problems = settings.validate()
     for p in problems:
         log.error("configuration: %s", p)
+    audit.attach(settings.state_dir)
     catalog.load_bundled()
     tasks: list[asyncio.Task[Any]] = []
     if settings.catalog_auto_refresh:
@@ -169,6 +198,7 @@ app = Starlette(
         Route("/", index),
         Route("/health", health),
         Route("/ready", ready),
+        Route("/setup", setup),
         Route("/.well-known/oauth-protected-resource", prm),
         Route("/.well-known/oauth-protected-resource" + settings.mcp_path, prm),
         Route("/connector.yaml", connector_yaml),

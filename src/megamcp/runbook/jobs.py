@@ -25,6 +25,7 @@ from . import budget
 log = logging.getLogger("megamcp.jobs")
 
 TERMINAL = ("succeeded", "failed", "cancelled")
+STARTED = time.time()
 
 
 @dataclass

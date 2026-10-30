@@ -22,7 +22,7 @@ from ..auth.entra import current_principal
 from ..config import settings
 from ..runbook import budget
 from ..runbook.invoke import RunbookError, runbook
-from ..runbook.jobs import Job, jobs
+from ..runbook.jobs import STARTED, Job, jobs
 from .common import READ, err, parse_json_arg
 
 ENV_TYPES = {"production", "sandbox", "developer", "default", "trial", "teams", "subscriptionbasedtrial", "notspecified"}
@@ -222,7 +222,8 @@ def register(mcp: MCPServer) -> None:
         job = jobs.get(job_id, p.cache_key)
         if job is None:
             return err(f"Unknown job {job_id}. Jobs are kept in memory for {settings.job_retention_hours} hours on the server instance that ran them; "
-                       "a restart or a scaled-out instance will not know it. Start the job again.")
+                       "a restart or a scaled-out instance will not know it. Start the job again.",
+                       server_restarted_minutes_ago=round((time.time() - STARTED) / 60), next_step="Run the original request again. Do not tell the admin it failed for good.")
         if cancel and not job.done:
             jobs.cancel(job)
             await jobs.wait(job, 5)

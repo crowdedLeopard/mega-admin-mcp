@@ -438,6 +438,26 @@ def download_pp_wheel(tmp: Path) -> Path | None:
         return None
 
 
+def parse_pp_template(template: str) -> tuple[str, list[str], set[str]]:
+    """Split a Kiota URL template into (path, query parameter names, required query names).
+
+    Required query parameters are written literally after api-version and optional ones in {&...}:
+      /licensing/entitlements/{entitlementId}/users?api%2Dversion={api%2Dversion}&fromDate={fromDate}&toDate={toDate}{&pageSize*}
+    """
+    path = re.sub(r"\{[?&][^}]*\}", "", template)
+    path = re.split(r"[?&]", path, maxsplit=1)[0]
+
+    def clean(name: str) -> str:
+        return urllib.request.unquote(name.replace("%2D", "-").replace("%24", "$"))
+
+    required = [clean(x) for x in re.findall(r"[?&]([A-Za-z%0-9_]+)=\{", template)]
+    optional: list[str] = []
+    for qm in re.finditer(r"\{[?&]([^}]*)\}", template):
+        optional += [clean(x.strip("*")) for x in qm.group(1).split(",")]
+    names = [x for x in dict.fromkeys(required + optional) if x and "api" not in x.lower()]
+    return path, names, {x for x in required if x in names}
+
+
 def build_powerplatform(tmp: Path) -> list[dict[str, Any]]:
     whl = download_pp_wheel(tmp)
     if not whl:
@@ -455,16 +475,7 @@ def build_powerplatform(tmp: Path) -> list[dict[str, Any]]:
         if not m:
             continue
         template = m.group(1).replace("{+baseurl}", "")
-        path = re.sub(r"\{\?[^}]*\}", "", template)
-        path = re.sub(r"\?api-version=\{api%2Dversion\}", "", path)
-        path = re.sub(r"\{&[^}]*\}", "", path)
-        path = path.split("?")[0]
-        # query params from template
-        q_names = []
-        for qm in re.finditer(r"\{[?&]([^}]*)\}", template):
-            q_names += [x.strip("*") for x in qm.group(1).split(",")]
-        q_names += re.findall(r"[?&]([A-Za-z%0-9]+)=\{", template)
-        q_names = [urllib.request.unquote(x.replace("%2D", "-").replace("%24", "$")) for x in q_names if x and "api" not in x.lower()]
+        path, q_names, q_required = parse_pp_template(template)
         # descriptions from QueryParameters dataclass comments
         q_desc: dict[str, str] = {}
         for qm in re.finditer(r"#\s*(.+)\n\s+([a-z_0-9]+):\s*Optional\[", src):
@@ -477,7 +488,7 @@ def build_powerplatform(tmp: Path) -> list[dict[str, Any]]:
             params.append({"n": "api-version", "in": "query", "req": True, "t": "string", "d": f"API version, default {av}"})
             for qn in q_names:
                 key = qn.replace("$", "").replace("-", "_")
-                params.append({"n": qn, "in": "query", "req": False, "t": "string", "d": q_desc.get(key, q_desc.get(key.lower(), ""))})
+                params.append({"n": qn, "in": "query", "req": qn in q_required, "t": "string", "d": q_desc.get(key, q_desc.get(key.lower(), ""))})
             rec: dict[str, Any] = {
                 "id": f"powerplatform:{method}:{path}", "svc": "powerplatform", "ver": "", "m": method, "p": path,
                 "s": clip(summary, 160), "d": clip(summary, 300), "tags": [ns], "params": params, "av": av,

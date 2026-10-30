@@ -32,6 +32,8 @@ Prompt: *"Which agents have used the most credits this month and which have no l
 
 How it gets there matters, because the obvious API does not work. The tenant-wide per-agent operation (`/licensing/entitlements/MCSMessages/resources`) answers 403 for a Power Platform Administrator, and the licensing report endpoint answers 404. What does work is per user: one call lists everyone who consumed credits in the period, and a call per user returns their usage per agent and feature. The server adds those up. Each user's agent rows add up exactly to that user's total, and the result shows `coverage`: how much of the tenant's billed total it could attribute to agents, and which users could not be broken down. My dev tenant has data back to May 2025, so twelve months is real history, not an estimate.
 
+One risk to know about: Microsoft marks these dated licensing operations deprecated in its SDK and names no replacement. They work today, and the agent sees a deprecation warning if it calls them through `invoke`. If they are retired, this tool stops working until there is a new source.
+
 The scan touches every consuming user, so the first run for a period is a background job: in my tenant about 220 users and a few minutes. The agent gets a job id, polls `job_status`, and shows the answer when it is ready. The result is cached for six hours, so the follow-up questions ("now by environment", "just the Sales environment", "who created the top five") come back instantly.
 
 Prompt: *"Copilot Credits spend over the last six months by agent, with creator and environment."* then *"Same for twelve months, grouped by environment."*

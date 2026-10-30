@@ -436,3 +436,34 @@ def test_background_jobs_use_the_freshest_user_token():
     finally:
         settings.auth_mode = saved
     assert b.assertion_valid_for(Principal(mode="none")) == float("inf")
+
+
+def test_power_platform_catalog_paths_have_no_query_string():
+    import importlib.util
+    from pathlib import Path
+    from megamcp.catalog.store import CatalogStore
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "build_catalog.py"
+    spec = importlib.util.spec_from_file_location("build_catalog_under_test", script)
+    builder = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(builder)
+
+    path, names, required = builder.parse_pp_template(
+        "/licensing/entitlements/{entitlementId}/users?api%2Dversion={api%2Dversion}&fromDate={fromDate}&toDate={toDate}{&continuationToken*,pageSize*}")
+    assert path == "/licensing/entitlements/{entitlementId}/users"
+    assert names == ["fromDate", "toDate", "continuationToken", "pageSize"] and required == {"fromDate", "toDate"}
+    assert builder.parse_pp_template("/licensing/billingPolicies?api%2Dversion={api%2Dversion}{&%24top*}") == ("/licensing/billingPolicies", ["$top"], set())
+    assert builder.parse_pp_template("/x/{id}{?a*,b*}") == ("/x/{id}", ["a", "b"], set())
+
+    c = CatalogStore()
+    c.load_bundled()
+    pp = [o for o in c.ops if o["svc"] == "powerplatform"]
+    assert pp and not [o["p"] for o in pp if "&" in o["p"] or "?" in o["p"]]
+    for o in pp:  # a path parameter must really be in the path
+        for p in o.get("params", []):
+            if p["in"] == "path":
+                assert "{" + p["n"] + "}" in o["p"], o["id"]
+    how = c.describe("powerplatform:GET:/licensing/entitlements/{entitlementId}/users")["how_to_call"]
+    assert how["required_query_json"] == {"fromDate": "<fromDate>", "toDate": "<toDate>"}
+    assert [o["id"] for o in c.match_path("powerplatform", "GET", "/licensing/entitlements/MCSMessages/users")] == [
+        "powerplatform:GET:/licensing/entitlements/{entitlementId}/users"]

@@ -362,6 +362,9 @@ class CatalogStore:
             ex["path"] = f"/{op.get('ver') or 'v1.0'}{op['p']}"
         if op.get("av"):
             ex["api_version"] = op["av"]
+        required_query = [p["n"] for p in op.get("params", []) if p.get("in") == "query" and p.get("req") and p.get("n") != "api-version"]
+        if required_query:
+            ex["required_query_json"] = {n: f"<{n}>" for n in required_query}
         if svc == "dataverse":
             ex["dataverse_org_url"] = "https://<org>.crm.dynamics.com"
         if op["m"] in ("POST", "PUT", "PATCH", "DELETE"):

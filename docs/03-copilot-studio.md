@@ -2,10 +2,12 @@
 
 Copilot Studio talks to MCP servers over Streamable HTTP through a Power Platform custom connector. The MCP onboarding wizard builds that connector for you; this page walks through it screen by screen and explains the choices.
 
+The server's setup page at `https://<app name>.azurewebsites.net/setup` has every value below filled in for your server, and shows what the server sees as you connect. Keep it open beside the wizard.
+
 ## Before you open the wizard
 
-- The server is deployed and `https://<app name>.azurewebsites.net/ready` says ready.
-- You have the client id and secret from `setup-entra.ps1`.
+- The setup page says the server is ready.
+- You have the client secret the installer printed. Lost it? `./scripts/setup-entra.ps1 -AppId <client id> -NewSecret`.
 - You are in a Copilot Studio environment that allows custom connectors. The default environment is often locked down by a tenant DLP policy; use a developer or sandbox environment first.
 - You are signing in to Copilot Studio with the account that holds the admin roles you want the agent to use. The agent will never have more rights than that account.
 
@@ -31,6 +33,9 @@ Copilot Studio talks to MCP servers over Streamable HTTP through a Power Platfor
 8. Add the redirect URL to the app registration: `./scripts/setup-entra.ps1 -AppId <client id> -AddRedirectUri "<url>"` (or Entra admin centre, App registrations, Authentication, Add a platform, Web).
 9. Back in the wizard select **Next**, then **Create a new connection**. A sign-in window opens. Sign in and accept the consent prompt; it lists the permissions from the tier you chose. On the core tier any admin can accept it; on the full tier a Global Administrator must have consented first or the prompt says admin approval is needed.
 10. Select **Add to agent**. The tools page now lists 39 tools from the server.
+11. Open the tool and check that **Additional details**, **Credentials to use** says **End user credentials**. It is the default. Don't change it: with **Maker-provided credentials** everyone who can talk to the agent acts with your admin roles, and the server can't tell the difference because the token it receives is yours. Admins can take the option away altogether in the Power Platform admin centre, under the environment's Settings, Product, Features, **Control maker credential options**.
+
+Every agent, and every environment you repeat this in, creates a new connector with a new redirect URL. Add each one to the app registration.
 
 ## Making the agent use it well
 
@@ -50,6 +55,10 @@ In the test pane:
 5. *"Allocate 1000 credits to <an environment> but do not confirm."* You get the preview and a question. That is the behaviour you want.
 
 Use the activity map (the icon in the test pane) to see which tool was called with what arguments and what came back.
+
+## If it doesn't connect
+
+Look at the "What the server has seen" section of the setup page first. If the page shows nothing has connected, the request never reached the server, so look at the Copilot Studio side: the redirect URL, consent, or a data policy blocking the connector. If it shows refused requests, it tells you what to change. `./scripts/check-install.ps1` checks everything that can be checked from outside Copilot Studio.
 
 ## Importing the connector yourself instead
 

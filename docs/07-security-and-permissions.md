@@ -61,9 +61,15 @@ The Bicep template enables HTTPS only, TLS 1.2 minimum, FTPS disabled, a system-
 - Keep the app registration single tenant (the script does). Multi-tenant is not supported by design.
 - Set `READ_ONLY=true` on any instance whose only job is reporting.
 
+## Failing closed
+
+- Delegated mode with no `TENANT_ID` or `CLIENT_ID` refuses every call. There is nothing to check a token against, so it doesn't try.
+- `AUTH_MODE` defaults to `none` only on a developer's machine, where the server listens on loopback. On App Service, Container Apps and Kubernetes it defaults to `delegated`, the published image defaults to `delegated` everywhere, and `AUTH_MODE=none` on a hosting platform is refused unless you also set `ALLOW_NO_AUTH=true`, which is for when something else in front of the server does the sign-in.
+- `/setup`, `/ready` and `/connector.yaml` need no sign-in, because you need them before sign-in works. They show the tenant id, client id, version and the reasons connections were refused. They never show a secret, a token or a user's name.
+
 ## Data handling
 
-The server is a pass-through. It does not persist responses, it holds the audit ring in memory only, and it truncates large responses before returning them to the agent. Copilot Studio stores conversation transcripts according to your tenant's settings; the server adds nothing to that.
+The server is a pass-through. It does not persist responses, it writes the audit log (who, what, status, never bodies) to `STATE_DIR` as well as to the host's logs, and it truncates large responses before returning them to the agent. Copilot Studio stores conversation transcripts according to your tenant's settings; the server adds nothing to that.
 
 ## Data loss prevention
 

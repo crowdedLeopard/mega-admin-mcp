@@ -1,16 +1,18 @@
 # Troubleshooting
 
-Start with `doctor`. Ask the agent to run it, or call it from any MCP client. It checks configuration, tokens per service, live calls and the catalog, and finishes with advice. Most of the issues below show up there with a fix attached.
+If the agent can't reach the server at all, start with the setup page, `https://<app>.azurewebsites.net/setup`. It shows whether the server is ready and why it refused any connections. Then run `./scripts/check-install.ps1 -AppId <client id> -ResourceGroup <group> -WebAppName <app>`, which checks the app registration, secret expiry, redirect URL, consent and credential, and changes nothing.
+
+If the agent can reach it, use `doctor`. Ask the agent to run it, or call it from any MCP client. It checks configuration, tokens per service, live calls and the catalog, and finishes with advice. Most of the issues below show up there with a fix attached.
 
 ## Adding the server in Copilot Studio
 
-**The wizard cannot reach the server / "could not connect".** Open `https://<app>.azurewebsites.net/health` in a browser. If it does not answer, the App Service is not running: check the deployment log in the portal (Deployment Center) and the startup command (`python run.py`). If `/health` works but `/ready` says degraded, read the `configuration_problems` list.
+**The wizard cannot reach the server / "could not connect".** Open `https://<app>.azurewebsites.net/health` in a browser. If it does not answer, the App Service is not running: see what it's doing with `az webapp log tail -g <group> -n <app>`. On a source deployment, also check the deployment log and the startup command (`python run.py`). If `/health` works but `/ready` says degraded, read the `configuration_problems` list.
 
 **No tools listed, or fewer tools than expected.** Copilot Studio drops tools whose input schema it cannot handle. All 39 tools use flat primitive parameters on purpose; if you changed a tool signature, keep to string, integer, number and boolean with defaults. The CI test `test_tool_schemas_are_copilot_studio_safe` guards this.
 
 **Sign-in loop or AADSTS50011 (reply URL mismatch).** The redirect URL from the wizard is not on the app registration. Run `./scripts/setup-entra.ps1 -AppId <client id> -AddRedirectUri "<url>"` and sign in again.
 
-**AADSTS65001 or "need admin approval" at sign-in.** You are on the full tier (or added an admin-consent scope) and nobody has consented. A Global Administrator opens `https://login.microsoftonline.com/<tenant>/adminconsent?client_id=<client id>`, or runs the script with `-GrantAdminConsent`.
+**AADSTS65001 or "need admin approval" at sign-in.** Either you are on the full tier (or added an admin-consent scope) and nobody has consented, or your tenant doesn't let users consent to apps at all, which is common in larger organisations. A Global Administrator or Privileged Role Administrator uses the admin consent link on the setup page, or runs the script with `-GrantAdminConsent`. `check-install.ps1` says which applies.
 
 **AADSTS90009 "Application is requesting a token for itself" at sign-in.** The scopes box contains `api://<client id>/.default`. Because the app is both client and resource, Entra insists on the GUID form: `<client id>/.default`. Delete the tool (and the custom connector it created) and run the wizard again with the right value.
 

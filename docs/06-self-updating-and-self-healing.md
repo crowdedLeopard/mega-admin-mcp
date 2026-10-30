@@ -46,7 +46,9 @@ Every call goes through one executor, so every tool gets the same behaviour:
 ## Self-healing: around the process
 
 - `/health` is a liveness probe, `/ready` checks configuration and catalog. The Bicep template sets App Service's health check path to `/health`, so unhealthy instances are replaced, and turns on auto-heal: twenty 5xx in five minutes or thirty requests slower than two minutes recycle the process.
-- The server is stateless (JSON responses, no sessions), so you can scale out or restart it any time. Token caches are rebuilt on demand.
+- MCP traffic is stateless (JSON responses, no sessions), so a restart costs nothing there and token caches are rebuilt on demand. Background jobs and the six hour spend cache are held in memory: a restart loses them, the agent is told to start the job again, and a scaled-out instance won't know about another's jobs. So run one instance. The audit log is kept on disk under `STATE_DIR`, which on App Service defaults to `/home/data/megamcp`.
+- A damaged catalog or an unwritable state folder doesn't stop the server. It starts with what it has, says so on `/ready`, and the next refresh replaces the catalog.
+- **Server code doesn't update itself, only the catalog does.** The daily catalog also carries the latest server version, so `/ready`, `/setup` and `doctor` say when there is newer code. Updating is `git pull`, then running `./scripts/install.ps1` again. Deployments use exact dependency versions from `requirements.txt`, so a new release of a library can't break a server that was working, and a weekly CI run tells me when one would.
 - `doctor` runs live checks: configuration, a token per downstream API for the signed-in admin, a real call to Graph, Azure and the Power Platform API, catalog freshness, open circuit breakers and audit statistics, and ends with advice in plain words.
 - The daily workflow runs the tests against the fresh catalog before publishing it, and CI smoke tests the MCP endpoint on every push.
 

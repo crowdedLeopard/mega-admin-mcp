@@ -258,14 +258,25 @@ def _advice(problems: list[str], checks: list[dict[str, Any]], live: list[dict[s
                       f"Fix: {cred.get('fix')}")
         return advice
     failed = [c for c in checks if c["status"] == "failed"]
+    # Missing consent fails every API the same way: say it once, naming them all.
+    by_fix: dict[str, list[dict[str, Any]]] = {}
     for c in failed:
-        fix = c.get("fix")
-        advice.append(f"{c['service']}: {c.get('message', 'token failed')}" + (f" Fix: {fix}" if fix else ""))
+        by_fix.setdefault(c.get("fix") or f"\0{c['service']}", []).append(c)
+    for fix, group in by_fix.items():
+        names = ", ".join(c["service"] for c in group)
+        if fix.startswith("\0"):
+            advice.append(f"{names}: {group[0].get('message', 'token failed')}")
+        elif len(group) == 1:
+            advice.append(f"{names}: {group[0].get('message', 'token failed')} Fix: {fix}")
+        else:
+            advice.append(f"{names}: {fix}")
+    no_token = {c["service"] for c in failed}
     skipped = [c["service"] for c in checks if str(c["status"]).startswith("not consented")]
     if skipped:
         advice.append(f"Optional services without consent (fine unless you need them): {', '.join(skipped)}. Add their scopes to scripts/permissions.json and re-run setup-entra.ps1 if you do.")
     for l in live:
-        if not l.get("ok"):
+        # A live call can't succeed without its token, and the token line above already says why. Inventory goes through Azure.
+        if not l.get("ok") and {"inventory": "arm"}.get(l["service"], l["service"]) not in no_token:
             advice.append(f"{l['service']} {l['path']} returned {l['status']}: {l.get('message', '')} {' '.join(l.get('hints', []))}".strip())
     if not advice:
         advice.append("Everything looks healthy.")

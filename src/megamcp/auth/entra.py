@@ -108,6 +108,15 @@ def _expected_issuers(tid: str) -> set[str]:
     }
 
 
+def _wrong_audience(aud: Any) -> AuthError:
+    return AuthError(
+        "Token audience is not this API. In Copilot Studio set Scopes to '<client-id>/.default offline_access' (GUID form)",
+        detail={"aud": aud, "accepted": settings.accepted_audiences}, kind="wrong_audience",
+        fix=f"The token was issued for another API. Set Scopes in the wizard to '{settings.client_id}/.default offline_access', then create a new connection.",
+        seen=str(aud),
+    )
+
+
 def validate_bearer(token: str) -> Principal:
     """Validate an Entra access token issued for this API and return the principal."""
     # Never fall through to "any Microsoft token will do": with no tenant or client id there is nothing to check the token against.
@@ -128,6 +137,12 @@ def validate_bearer(token: str) -> Principal:
         raise AuthError("Token was issued by another tenant", detail={"token_tid": tid, "expected": settings.tenant_id}, kind="wrong_tenant",
                         fix=f"Sign in with an account from tenant {settings.tenant_id}, and check the Authorization and Token URLs in the wizard contain that tenant id.", seen=str(tid))
 
+    # Check this before the signature. A wrong scope usually means a Microsoft Graph token, and those don't verify
+    # against the published keys, so the signature check would hide the real reason behind a vague one.
+    aud = unverified.get("aud")
+    if not set(aud if isinstance(aud, list) else [aud]) & set(settings.accepted_audiences):
+        raise _wrong_audience(aud)
+
     try:
         signing_key = _jwks.client(tid).get_signing_key_from_jwt(token)
         claims = jwt.decode(
@@ -146,12 +161,7 @@ def validate_bearer(token: str) -> Principal:
         raise AuthError("Token has expired", detail={"error": "token_expired"}, kind="token_expired",
                         fix=f"Isolated hits are normal. If it keeps happening the connection has no refresh token: Scopes must be '{settings.client_id}/.default offline_access'; then reconnect.") from e
     except jwt.InvalidAudienceError as e:
-        raise AuthError(
-            "Token audience is not this API. In Copilot Studio set Scopes to '<client-id>/.default offline_access' (GUID form)",
-            detail={"aud": unverified.get("aud"), "accepted": settings.accepted_audiences}, kind="wrong_audience",
-            fix=f"The token was issued for another API. Set Scopes in the wizard to '{settings.client_id}/.default offline_access', then create a new connection.",
-            seen=str(unverified.get("aud")),
-        ) from e
+        raise _wrong_audience(aud) from e
     except jwt.PyJWTError as e:
         raise AuthError(f"Token validation failed: {e}", kind="invalid_token",
                         fix="The token's signature or claims did not check out. Create a new connection; if that fails, check the wizard values against this page.") from e

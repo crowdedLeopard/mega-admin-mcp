@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mega-admin-mcp"
-version = "1.4.0"
+version = "1.4.1"
 description = "Mega Admin MCP: one self-updating, self-healing MCP server that lets Copilot Studio agents run any Microsoft admin REST call, with FinOps and AI tokenomics built in."
 readme = "README.md"
 requires-python = ">=3.11"

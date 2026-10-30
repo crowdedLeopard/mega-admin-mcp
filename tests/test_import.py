@@ -23,6 +23,7 @@ from megamcp.catalog.store import CatalogStore, longpath  # noqa: E402
 from megamcp.config import Settings, settings  # noqa: E402
 from megamcp.diagnostics import connections  # noqa: E402
 from megamcp.runbook.policy import AuditLog  # noqa: E402
+from megamcp.tools.core import _advice  # noqa: E402
 
 TENANT = "11111111-1111-1111-1111-111111111111"
 CLIENT = "22222222-2222-2222-2222-222222222222"
@@ -148,6 +149,22 @@ def test_refused_tokens_say_what_to_change(delegated, keys, client, claims, kind
     assert "www-authenticate" in r.headers
 
 
+def test_a_graph_token_is_called_a_wrong_scope_not_a_bad_signature(delegated, keys, monkeypatch, client):
+    """Found by sending a real Graph token to a clean install: they don't verify against the published keys, so the
+    signature error used to hide the real reason. Signed here with a key the server doesn't trust to get the same effect."""
+    other = _Keys().token(aud="https://graph.microsoft.com")
+    r = client.post("/mcp", json=PING, headers={**MCP_HEADERS, "authorization": f"Bearer {other}"})
+    assert r.status_code == 401 and f"{CLIENT}/.default offline_access" in r.json()["fix"]
+    assert [x["kind"] for x in connections.summary()["refused"]] == ["wrong_audience"]
+
+
+def test_right_audience_with_a_bad_signature_is_still_refused(delegated, keys, client):
+    forged = _Keys().token()
+    r = client.post("/mcp", json=PING, headers={**MCP_HEADERS, "authorization": f"Bearer {forged}"})
+    assert r.status_code == 401
+    assert [x["kind"] for x in connections.summary()["refused"]] == ["invalid_token"]
+
+
 def test_good_token_connects_and_is_recorded(delegated, keys, client):
     r = client.post("/mcp", json=PING, headers={**MCP_HEADERS, "authorization": f"Bearer {keys.token()}"})
     assert r.status_code == 200, r.text
@@ -218,6 +235,22 @@ def test_audit_log_survives_a_restart(tmp_path):
     second.attach(str(tmp_path / "state"))
     assert [e["user"] for e in second.recent()] == ["a@contoso.com"]
     assert second.stats()["stored_in"].endswith("audit.jsonl")
+
+
+def test_audit_stats_do_not_count_a_preview_as_a_write():
+    log = AuditLog(10)
+    log.record({"write": True, "status": "preview"})
+    log.record({"write": True, "status": "blocked"})
+    log.record({"write": True, "status": 204})
+    stats = log.stats()
+    assert stats["writes_executed"] == 1 and stats["write_previews"] == 1 and stats["blocked"] == 1
+
+
+def test_doctor_gives_one_answer_when_every_api_lacks_consent():
+    fix = "Nobody has consented."
+    checks = [{"service": s, "status": "failed", "message": f"failed for {s}", "fix": fix} for s in ("graph", "arm", "powerplatform")]
+    live = [{"service": s, "path": "/x", "status": 0, "ok": False} for s in ("graph", "arm", "powerplatform", "inventory")]
+    assert _advice([], checks, live, {"ok": True}) == [f"graph, arm, powerplatform: {fix}"]
 
 
 def test_audit_log_rotates_rather_than_filling_the_disk(tmp_path, monkeypatch):

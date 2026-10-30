@@ -144,7 +144,7 @@ class AuditLog:
             items = list(self._ring)
         total = len(items)
         failures = sum(1 for i in items if (isinstance(i.get("status"), int) and i["status"] >= 400) or i.get("error"))
-        writes = sum(1 for i in items if i.get("write"))
+        writes = sum(1 for i in items if i.get("write") and i.get("status") not in ("preview", "blocked"))
         previews = sum(1 for i in items if i.get("status") == "preview")
         blocked = sum(1 for i in items if i.get("status") == "blocked")
         healed = sum(1 for i in items if i.get("healing"))

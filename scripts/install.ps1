@@ -161,21 +161,27 @@ if (-not $?) { Stop-Install "Could not set up the managed identity credential. Y
 
 # ---------------------------------------------------------------------------
 Step "5 of 6  Waiting for the server (the first start pulls the container)"
+# On an update, App Service keeps serving the old container until the new one is up, so "ready" alone proves nothing.
+$expected = if ($Image -match ":$([regex]::Escape($version))$") { $version } else { "" }
 $deadline = (Get-Date).AddMinutes($ReadyTimeoutMinutes)
 $ready = $null
+$done = $false
 $lastSaid = ""
 while ((Get-Date) -lt $deadline) {
     $ready = $null
     try {
         $ready = Invoke-RestMethod -Uri "$baseUrl/ready" -TimeoutSec 30 -SkipHttpErrorCheck
     } catch { }
-    if ($ready.status -eq "ready") { break }
-    $said = if ($ready) { "Up, not ready yet: $(@($ready.configuration_problems) + @($ready.server_credential.aad_error) -join '; ')" } else { "Not answering yet..." }
+    $done = $ready.status -eq "ready" -and (-not $expected -or $ready.version -eq $expected)
+    if ($done) { break }
+    $said = if (-not $ready) { "Not answering yet..." }
+            elseif ($expected -and $ready.version -ne $expected) { "Still running version $($ready.version); waiting for $expected..." }
+            else { "Up, not ready yet: $(@($ready.configuration_problems) + @($ready.server_credential.aad_error) -join '; ')" }
     if ($said -ne $lastSaid) { Write-Host $said; $lastSaid = $said }
     Start-Sleep -Seconds 15
 }
-if ($ready.status -ne "ready") {
-    Write-Host "The server wasn't ready after $ReadyTimeoutMinutes minutes." -ForegroundColor Red
+if (-not $done) {
+    Write-Host "The server wasn't ready on the expected version after $ReadyTimeoutMinutes minutes." -ForegroundColor Red
     if ($ready) { $ready | ConvertTo-Json -Depth 5 | Write-Host }
     Write-Host "See what the container is doing:  az webapp log tail -g $ResourceGroup -n $AppName"
     Write-Host "Then run this script again. It carries on from where it stopped."

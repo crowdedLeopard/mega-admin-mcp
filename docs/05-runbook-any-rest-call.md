@@ -63,7 +63,7 @@ then the same call with `"confirm": true`.
 
 ## Writes and the confirm pattern
 
-Any POST, PUT, PATCH or DELETE that is not a read in disguise (Cost Management query, Resource Graph query, Graph $batch and a few others are treated as reads) returns:
+Any POST, PUT, PATCH or DELETE that is not a read in disguise (Cost Management query, Resource Graph query, a Graph $batch made up only of GETs and a few others are treated as reads) returns:
 
 ```json
 {"status": "preview", "needs_confirm": true, "request": {"method": "...", "url": "...", "body": {...}},

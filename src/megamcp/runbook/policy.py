@@ -24,7 +24,7 @@ WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 # POSTs that are really reads (query / search / report generation requests)
 READ_LIKE_POST = re.compile(
     r"(/providers/Microsoft\.CostManagement/(query|forecast)|/providers/Microsoft\.ResourceGraph/resources|"
-    r"/\$batch$|/search/query|/getSchedule|/checkMemberGroups|/getMemberGroups|/getByIds|/estimateCosts|"
+    r"/search/query|/getSchedule|/checkMemberGroups|/getMemberGroups|/getByIds|/estimateCosts|"
     r"/validate$|/checkNameAvailability|/listKeys$|/listSecrets$|/exportData|/queries\b|/query\b)",
     re.IGNORECASE,
 )
@@ -42,22 +42,27 @@ class Policy:
         self._deny = [re.compile(p, re.IGNORECASE) for p in settings.deny_patterns]
 
     @staticmethod
-    def is_write(method: str, url: str) -> bool:
+    def is_write(method: str, url: str, body: Any = None) -> bool:
         m = method.upper()
         if m not in WRITE_METHODS:
             return False
-        if m == "POST" and READ_LIKE_POST.search(url.split("?")[0]):
+        path = url.split("?")[0]
+        if m == "POST" and READ_LIKE_POST.search(path):
             return False
+        # A batch is only as read-only as what's inside it. Anything unclear gets a preview.
+        if m == "POST" and path.endswith("/$batch"):
+            inner = body.get("requests") if isinstance(body, dict) else None
+            return not (isinstance(inner, list) and inner and all(isinstance(r, dict) and str(r.get("method", "")).upper() == "GET" for r in inner))
         return True
 
-    def evaluate(self, method: str, url: str, confirm: bool) -> PolicyDecision:
+    def evaluate(self, method: str, url: str, confirm: bool, body: Any = None) -> PolicyDecision:
         subject = f"{method.upper()} {url}"
         for rx in self._deny:
             if rx.search(subject):
                 return PolicyDecision(allowed=False, reason=f"blocked by DENY_PATTERNS ({rx.pattern})")
         if self._allow and not any(rx.search(subject) for rx in self._allow):
             return PolicyDecision(allowed=False, reason="not matched by ALLOW_PATTERNS")
-        write = self.is_write(method, url)
+        write = self.is_write(method, url, body)
         if write and settings.read_only:
             return PolicyDecision(allowed=False, reason="server is in READ_ONLY mode; write operations are disabled")
         if write and settings.require_confirm_for_writes and not confirm:

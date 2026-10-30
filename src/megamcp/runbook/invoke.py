@@ -180,7 +180,7 @@ class Runbook:
         except RunbookError as e:
             return self._fail(e.result, raise_on_error)
 
-        decision = policy.evaluate(method, url, confirm)
+        decision = policy.evaluate(method, url, confirm, body)
         if not decision.allowed:
             preview = {
                 "status": "preview" if decision.get("needs_confirm") else "blocked",

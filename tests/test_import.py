@@ -22,7 +22,7 @@ from megamcp.auth.entra import AuthError, principal_from_request_headers, valida
 from megamcp.catalog.store import CatalogStore, longpath  # noqa: E402
 from megamcp.config import Settings, settings  # noqa: E402
 from megamcp.diagnostics import connections  # noqa: E402
-from megamcp.runbook.policy import AuditLog  # noqa: E402
+from megamcp.runbook.policy import AuditLog, Policy  # noqa: E402
 from megamcp.tools.core import _advice  # noqa: E402
 
 TENANT = "11111111-1111-1111-1111-111111111111"
@@ -235,6 +235,21 @@ def test_audit_log_survives_a_restart(tmp_path):
     second.attach(str(tmp_path / "state"))
     assert [e["user"] for e in second.recent()] == ["a@contoso.com"]
     assert second.stats()["stored_in"].endswith("audit.jsonl")
+
+
+def test_a_batch_cannot_smuggle_writes_past_the_preview_or_read_only(monkeypatch):
+    url = "https://graph.microsoft.com/v1.0/$batch"
+    reads = {"requests": [{"id": "1", "method": "GET", "url": "/users"}, {"id": "2", "method": "get", "url": "/groups"}]}
+    mixed = {"requests": [{"id": "1", "method": "GET", "url": "/users"}, {"id": "2", "method": "DELETE", "url": "/users/x"}]}
+    p = Policy()
+    assert p.evaluate("POST", url, False, reads).allowed
+    assert p.evaluate("POST", url, False, mixed).get("needs_confirm")
+    for unclear in (None, {}, {"requests": []}, {"requests": "x"}, {"requests": [{"id": "1"}]}):
+        assert p.evaluate("POST", url, False, unclear).get("needs_confirm"), unclear
+    assert p.evaluate("POST", url, True, mixed).allowed
+    monkeypatch.setattr(settings, "read_only", True)
+    assert not p.evaluate("POST", url, True, mixed).allowed
+    assert p.evaluate("POST", url, False, reads).allowed
 
 
 def test_audit_stats_do_not_count_a_preview_as_a_write():

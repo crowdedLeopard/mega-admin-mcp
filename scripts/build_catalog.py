@@ -648,7 +648,9 @@ def main() -> int:
             "added": len(added), "removed": len(removed), "duration_seconds": int(time.time() - started),
             "previous_generated": (previous or {}).get("generated", "")}
 
-    catalog = {"generated": generated, "sources": sources_meta, "warnings": WARNINGS, "operations": ops_all}
+    # Deployed servers read this to say when newer server code exists; the catalog itself cannot deliver code.
+    server_version = re.search(r'__version__ = "([^"]+)"', (ROOT / "src" / "megamcp" / "__init__.py").read_text(encoding="utf-8")).group(1)
+    catalog = {"generated": generated, "server_version": server_version, "sources": sources_meta, "warnings": WARNINGS, "operations": ops_all}
     with gzip.open(longpath(out_dir / "catalog.json.gz"), "wt", encoding="utf-8", compresslevel=9) as f:
         json.dump(catalog, f, separators=(",", ":"), ensure_ascii=False)
     write_text(out_dir / "catalog_meta.json", json.dumps(meta, indent=2))

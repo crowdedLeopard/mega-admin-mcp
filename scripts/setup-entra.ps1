@@ -32,7 +32,9 @@ param(
   [string[]]$RedirectUris = @(),
   [switch]$GrantAdminConsent,
   [switch]$NoSecret,
-  [int]$SecretYears = 1,
+  [switch]$NewSecret,      # add a secret even when the app already has one (a lost secret)
+  [switch]$PassThru,       # return the ids and any new secret as an object, for scripts/install.ps1
+  [int]$SecretYears = 2,
   [string]$PermissionsFile = (Join-Path $PSScriptRoot "permissions.json")
 )
 
@@ -52,12 +54,21 @@ function Invoke-Graph {
   param([string]$Method, [string]$Url, $Body = $null)
   $params = @{ Method = $Method; Uri = $Url; Headers = $script:GraphHeaders }
   if ($null -ne $Body) { $params.Body = ($Body | ConvertTo-Json -Depth 20 -Compress) }
-  try {
-    return Invoke-RestMethod @params
-  } catch {
-    $detail = ""
-    try { $detail = $_.ErrorDetails.Message } catch {}
-    throw "Graph $Method $Url failed: $($_.Exception.Message) $detail"
+  # A new app takes a while to reach every Entra replica, so a 404 straight after creating one is not a real 404.
+  for ($attempt = 1; ; $attempt++) {
+    try {
+      return Invoke-RestMethod @params
+    } catch {
+      $status = 0
+      try { $status = [int]$_.Exception.Response.StatusCode } catch {}
+      if ($attempt -lt 5 -and ($status -in 429, 500, 502, 503, 504 -or ($status -eq 404 -and $Method -ne "GET"))) {
+        Start-Sleep -Seconds (5 * $attempt)
+        continue
+      }
+      $detail = ""
+      try { $detail = $_.ErrorDetails.Message } catch {}
+      throw "Graph $Method $Url failed: $($_.Exception.Message) $detail"
+    }
   }
 }
 
@@ -89,7 +100,10 @@ if ($AppId) {
 } else {
   $safeName = $Name.Replace("'", "''")
   $existing = Invoke-Graph GET "https://graph.microsoft.com/v1.0/applications?`$filter=displayName eq '$safeName'&`$select=id,appId,displayName"
-  if ($existing.value.Count -gt 0) {
+  if ($existing.value.Count -gt 1) {
+    throw "$($existing.value.Count) app registrations are called '$Name': $(($existing.value.appId) -join ', '). Say which one with -AppId, or use a different -Name."
+  }
+  if ($existing.value.Count -eq 1) {
     $app = $existing.value[0]
     $AppId = $app.appId
     Write-Host "Found existing app '$Name' ($AppId); updating it." -ForegroundColor Yellow
@@ -166,10 +180,20 @@ if ($missing.Count -gt 0) { Write-Host "Scopes not found in this tenant (skipped
 if (-not (Get-ServicePrincipalByAppId $AppId)) { az ad sp create --id $AppId -o none; Start-Sleep -Seconds 5 }
 
 # Client secret
+# Copilot Studio's connector needs this secret. The server does not if it uses its managed identity (scripts/use-managed-identity.ps1).
 $secret = $null
-if (-not $NoSecret) {
+$secretCount = @((Invoke-Graph GET "https://graph.microsoft.com/v1.0/applications/${objectId}?`$select=passwordCredentials").passwordCredentials).Count
+if ($NoSecret) {
+  Write-Host "No secret created (-NoSecret). The Copilot Studio wizard will need one." -ForegroundColor Yellow
+} elseif ($secretCount -gt 0 -and -not $NewSecret) {
+  Write-Host "The app already has $secretCount secret(s), so no new one was created. Lost it? Run with -NewSecret." -ForegroundColor Yellow
+} else {
   $cred = az ad app credential reset --id $AppId --append --display-name "mega-admin-mcp $(Get-Date -Format yyyy-MM-dd)" --years $SecretYears -o json | ConvertFrom-Json
-  $secret = $cred.password
+  if ($LASTEXITCODE -ne 0 -or -not $cred) {
+    Write-Host "Could not create a secret. Your tenant may limit secret lifetime: try -SecretYears 1, or create one in Entra admin centre, App registrations, Certificates & secrets." -ForegroundColor Yellow
+  } else {
+    $secret = $cred.password
+  }
 }
 
 # Admin consent
@@ -177,6 +201,10 @@ if ($GrantAdminConsent) {
   Write-Host "Granting tenant-wide admin consent..." -ForegroundColor Cyan
   az ad app permission admin-consent --id $AppId -o none
   if ($LASTEXITCODE -ne 0) { Write-Host "Admin consent failed. You need Global Administrator or Privileged Role Administrator. Use the consent URL below." -ForegroundColor Yellow }
+}
+
+if ($PassThru) {
+  return [pscustomobject]@{ TenantId = $tenantId; AppId = $AppId; ObjectId = $objectId; Secret = $secret }
 }
 
 Write-Host ""

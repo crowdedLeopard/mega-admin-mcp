@@ -35,19 +35,16 @@ FinOps is not a feature here, it is the point. The headline tools answer Copilot
 
 ## Get going
 
-Thirty minutes, three steps, no code. [docs/01-getting-started.md](docs/01-getting-started.md) has the detail.
+One command for Azure and Entra, then a page that walks you through Copilot Studio. No code. [docs/01-getting-started.md](docs/01-getting-started.md) has the detail.
 
 ```powershell
 git clone https://github.com/crowdedLeopard/mega-admin-mcp
 cd mega-admin-mcp
 az login --tenant <your tenant>
-./scripts/setup-entra.ps1 -Name "Mega Admin MCP" -Tier core        # 1. app registration, prints everything you need
-az group create -n rg-mega-admin-mcp -l uksouth
-az deployment group create -g rg-mega-admin-mcp -f deploy/bicep/main.bicep `
-  -p appName=<unique> tenantId=<tid> clientId=<cid> clientSecret=<secret>  # 2. server on App Service (or use the button)
-./scripts/use-managed-identity.ps1 -ResourceGroup rg-mega-admin-mcp -WebAppName <unique> -AppId <cid>  # 2b. recommended: server stops needing the secret
-# 3. Copilot Studio > Tools > Add a tool > Model Context Protocol > OAuth 2.0 Manual, paste the values the script printed
+./scripts/install.ps1
 ```
+
+It finishes by printing `https://<your server>/setup`. That page has every value the Copilot Studio wizard asks for, and shows what the server sees as you connect. Something not working? `./scripts/check-install.ps1` says what to fix.
 
 Then ask the agent: *"Give me the Copilot Credits position and tell me what you would change."*
 
@@ -107,7 +104,7 @@ Container: `docker run -p 8000:8000 -e AUTH_MODE=delegated -e TENANT_ID=... -e C
 ```
 src/megamcp/            the server (auth, catalog, runbook, tools, ASGI app)
 src/megamcp/data/       catalog.json.gz, changelog.json, curated/*.json
-scripts/                build_catalog.py, setup-entra.ps1, use-managed-identity.ps1, permissions.json, smoke_test.py
+scripts/                install.ps1, check-install.ps1, setup-entra.ps1, use-managed-identity.ps1, build_catalog.py, permissions.json, smoke_test.py
 deploy/                 main.bicep, azuredeploy.json (Deploy to Azure), Copilot Studio connector definition
 .github/workflows/      ci.yml, catalog-daily.yml
 docs/                   the admin documentation

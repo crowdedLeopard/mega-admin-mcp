@@ -14,6 +14,7 @@ from ..auth.tokens import TokenError, broker
 from ..catalog.services import SERVICES, resolve_service
 from ..catalog.store import catalog
 from ..config import settings
+from ..diagnostics import connections
 from ..runbook.invoke import runbook
 from ..runbook.policy import audit, policy
 from .common import READ, WRITE, err, parse_json_arg
@@ -101,6 +102,9 @@ def register(mcp: MCPServer) -> None:
             "token_checks": list(checks),
             "live_checks": live,
             "catalog": catalog.status(),
+            "server_version": __version__,
+            "update_available": catalog.update_available(),
+            "connections": connections.summary(),
             "circuit_breakers_open": runbook.breaker_status(),
             "audit": audit.stats(),
             "advice": _advice(problems, list(checks), live, cred),

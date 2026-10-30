@@ -86,6 +86,8 @@ def test_tool_schemas_are_copilot_studio_safe():
         s = json.dumps(schema)
         assert "$ref" not in s, t.name
         assert "anyOf" not in s and "oneOf" not in s, t.name
+        # Copilot Studio throws System.FormatException on a numeric exclusive bound (Microsoft's MCP troubleshooting page)
+        assert "exclusiveMinimum" not in s and "exclusiveMaximum" not in s, t.name
         assert re.match(r"^[A-Za-z0-9_-]{1,64}$", t.name)
         for name, prop in schema.get("properties", {}).items():
             assert isinstance(prop.get("type"), str), f"{t.name}.{name} has non-primitive type"

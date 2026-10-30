@@ -61,7 +61,7 @@ If a resource's service principal does not exist in your tenant yet (the Power P
 
 The server needs a credential of its own to perform the on-behalf-of exchange. Three options, in increasing order of how much I like them:
 
-1. **Client secret** in the `CLIENT_SECRET` setting. Simple. Rotate it before it expires (the script defaults to one year). Store it as a Key Vault reference in App Service rather than plain text when you can.
+1. **Client secret** in the `CLIENT_SECRET` setting. Simple. Rotate it before it expires (the script defaults to two years). Store it as a Key Vault reference in App Service rather than plain text when you can.
 2. **Certificate**: set `CLIENT_CERTIFICATE_PATH` (PEM with private key) and `CLIENT_CERTIFICATE_THUMBPRINT`.
 3. **Managed identity as federated credential**: set `USE_MANAGED_IDENTITY_FIC=true`. The App Service's system-assigned identity presents itself to Entra as the app's credential and nothing needs rotating. One command does all of it:
 

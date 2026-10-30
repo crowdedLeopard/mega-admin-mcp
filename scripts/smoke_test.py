@@ -68,9 +68,9 @@ def main() -> int:
     bad = []
     for t in tools.get("result", {}).get("tools", []):
         s = json.dumps(t.get("inputSchema", {}))
-        if "$ref" in s or "anyOf" in s or "oneOf" in s:
+        if any(k in s for k in ("$ref", "anyOf", "oneOf", "exclusiveMinimum", "exclusiveMaximum")):
             bad.append(t["name"])
-    check("Copilot Studio schema constraints", not bad, f"offending: {bad}" if bad else "no $ref/anyOf/oneOf")
+    check("Copilot Studio schema constraints", not bad, f"offending: {bad}" if bad else "no $ref/anyOf/oneOf/exclusive bounds")
 
     who = call_tool(a.url, "whoami", {}, headers)
     check("whoami", who.get("ok") is True, str(who.get("caller", who))[:160])

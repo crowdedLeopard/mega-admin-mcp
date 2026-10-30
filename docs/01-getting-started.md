@@ -1,6 +1,6 @@
 # Getting started
 
-This is the 30 minute path from nothing to an agent in Copilot Studio that can answer "how many Copilot Credits do we have left and who is burning them" and then go and fix it. You need three things: an Entra app registration, somewhere to run the server, and a Copilot Studio agent to attach it to.
+This is the path from nothing to an agent in Copilot Studio that can answer "how many Copilot Credits do we have left and who is burning them" and then go and fix it. One script does the Azure and Entra side. The server's own setup page walks you through Copilot Studio.
 
 I have written this for the admin who owns the tenant, not the developer. If you can run the Azure CLI and sign in to Copilot Studio you can do all of it.
 
@@ -12,57 +12,64 @@ I have written this for the admin who owns the tenant, not the developer. If you
 - Power Platform Administrator or Dynamics 365 Administrator for the Copilot Credits and environment tools. The server never has more rights than the person signed in to the agent.
 - Azure CLI 2.60 or later, signed in with `az login --tenant <your tenant>`.
 
-## Step 1. Create the app registration (5 minutes)
+## Step 1. Run the installer
 
 ```powershell
 git clone https://github.com/crowdedLeopard/mega-admin-mcp
 cd mega-admin-mcp
-./scripts/setup-entra.ps1 -Name "Mega Admin MCP" -Tier core
+az login --tenant <your tenant>
+./scripts/install.ps1
 ```
 
-The script creates one app registration that does three jobs: it is the API Copilot Studio signs you in to, it is the OAuth client Copilot Studio uses, and it holds the delegated permissions the server exchanges on your behalf. It prints the client id, a secret, and the exact values to type into Copilot Studio. Keep that output; you need it in steps 2 and 3.
+It needs PowerShell 7 and the Azure CLI. Azure Cloud Shell has both, plus git.
 
-Pick `-Tier full` if you want Microsoft 365 Copilot licence waste analysis, Entra directory reads and the Graph reporting endpoints. That tier needs admin consent, so add `-GrantAdminConsent` when a Global Administrator runs it, or send them the consent URL the script prints.
+The script creates the app registration, deploys an App Service running the published container, makes the web app's managed identity the server's credential, and waits until the server says it is ready. Then it checks the install from the outside and prints two things: the address of your setup page, and a client secret for the Copilot Studio wizard. The secret is shown once and only the connector uses it. The server holds no secret at all.
 
-Details and the full scope list are in [02-app-registration.md](02-app-registration.md).
+Every step is safe to repeat. If it stops, it says why; fix that and run it again. If the region you asked for has no quota for the plan, it moves on to the next region by itself, which is a real problem: my own subscription has no B1 quota in UK South.
 
-## Step 2. Deploy the server (10 minutes)
+The useful options are `-ResourceGroup`, `-Location`, `-AppName`, `-Sku` and `-SubscriptionId`. Add `-Tier full` if you want Microsoft 365 Copilot licence waste analysis, Entra directory reads and the Graph reporting endpoints. That tier needs admin consent, so add `-GrantAdminConsent` when a Global Administrator runs it. Details and the full scope list are in [02-app-registration.md](02-app-registration.md).
 
-Option A, the button. It deploys an App Service plan and web app, pulls the code from this repository and starts it.
+To update later, run `git pull` and the same command again.
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FcrowdedLeopard%2Fmega-admin-mcp%2Fmain%2Fdeploy%2Fazuredeploy.json)
+## Step 2. Open the setup page
 
-Fill in: a unique app name, your tenant id, the client id and secret from step 1, and optionally a default Azure subscription id for the cost tools. Leave `authMode` as `delegated`.
+Go to `https://<app name>.azurewebsites.net/setup`. It shows whether the server is ready and lists every value the Copilot Studio wizard asks for, filled in for your server, with copy buttons. Follow it from top to bottom. In short:
 
-Option B, the command line, which is what I use:
-
-```powershell
-az group create -n rg-mega-admin-mcp -l uksouth
-az deployment group create -g rg-mega-admin-mcp -f deploy/bicep/main.bicep `
-  -p appName=<unique name> tenantId=<tenant id> clientId=<client id> clientSecret=<secret> defaultSubscriptionId=<sub id>
-```
-
-Two things I hit in my own tenant that you might too. If validation fails with `InternalSubscriptionIsOverQuotaForSku`, the subscription has no quota for that SKU in that region; choose another region or SKU (the plan can live in a different region from the resource group). And the first build on a B1 plan takes six to eight minutes; if a command line deploy reports a gateway timeout, the build is usually still finishing, so check the deployment log before you redeploy.
-
-Either way, when it finishes open `https://<app name>.azurewebsites.net/ready`. You want `"status": "ready"` and a catalog count in the tens of thousands. If `/ready` says degraded it tells you which setting is missing.
-
-Option C is a container: `ghcr.io/crowdedleopard/mega-admin-mcp:latest`, same environment variables, port 8000. Container Apps, AKS or anything else that can run a container works; the server is stateless.
-
-## Step 3. Add it to Copilot Studio (10 minutes)
-
-1. In Copilot Studio open your agent, go to Tools, select Add a tool, then New tool, then Model Context Protocol.
-2. Server name `Mega Admin MCP`. Server description, something like `Runs any Microsoft admin REST call as the signed-in administrator and answers FinOps questions about Copilot Credits, Microsoft 365 Copilot licences and Azure OpenAI tokens and cost.` The orchestrator reads this to decide when to call the server, so say what it does in plain words.
-3. Server URL `https://<app name>.azurewebsites.net/mcp`.
-4. Authentication: OAuth 2.0, type Manual. Paste the values the setup script printed: client id, client secret, authorization URL, token URL, refresh URL, and scopes `<client id>/.default offline_access` (the GUID form, because `api://<client id>/.default` fails with AADSTS90009 when the app requests a token for itself; and `offline_access`, without which the connection stops working after about an hour).
-5. Select Create. Copilot Studio shows a redirect URL. Copy it and run:
+1. In Copilot Studio open your agent, then Tools, Add a tool, New tool, Model Context Protocol.
+2. Paste the server name, description and URL. Choose OAuth 2.0, then Manual, and paste the rest, with the client secret from the installer.
+3. Select Create. Copilot Studio shows a redirect URL, and you register it:
 
    ```powershell
    ./scripts/setup-entra.ps1 -AppId <client id> -AddRedirectUri "<the redirect URL>"
    ```
 
-6. Back in the wizard select Next, create a new connection, sign in (you consent to the permissions once), then Add to agent.
+4. Select Next, create a new connection, sign in, then Add to agent. The agent now lists 39 tools.
 
-The agent now lists 39 tools. Full walkthrough with what every screen looks like in [03-copilot-studio.md](03-copilot-studio.md).
+Keep the page open while you do this. Copilot Studio tends to report a failed connection as a generic error, but the server can see why it refused, so the page shows the reason and what to change. The commonest ones are a scope typed wrongly and an account from another tenant.
+
+If the sign-in prompt says it needs admin approval, your tenant doesn't let users consent for themselves. The setup page has a consent link to send to a Global Administrator. It brings them back to the page, which confirms it worked.
+
+Leave **Credentials to use** on **End user credentials**. With Maker-provided credentials, everyone who can talk to the agent acts with your admin roles. That is true of any connector, but this one can do a lot.
+
+Full walkthrough in [03-copilot-studio.md](03-copilot-studio.md).
+
+## Step 3. If something is off
+
+```powershell
+./scripts/check-install.ps1 -AppId <client id> -ResourceGroup rg-mega-admin-mcp -WebAppName <app name>
+```
+
+It changes nothing. It checks the app registration, the secret's expiry, the redirect URL, consent, the managed identity and the server, and says what to fix for each. Run it whenever a connection that used to work stops working.
+
+## Other ways to deploy
+
+**Deploy to Azure button.** Handy for a quick look. It deploys the same container, but you still have to run the app registration and managed identity steps yourself, so I use the installer.
+
+[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2FcrowdedLeopard%2Fmega-admin-mcp%2Fmain%2Fdeploy%2Fazuredeploy.json)
+
+**Your own container platform.** `ghcr.io/crowdedleopard/mega-admin-mcp:<version>`, port 8000, with `TENANT_ID`, `CLIENT_ID` and a credential. Container Apps, AKS or anything else that runs a container works. Started with no settings it refuses every call and explains why on `/setup`, rather than running open. Set `STATE_DIR` to a path that survives restarts to keep the audit log. Background jobs are held in memory, so run one instance.
+
+**From source.** The template can still build from GitHub (`containerImage=''` and `deployFromGitHub=true`), but the build takes six to eight minutes on B1 and is one more thing to fail.
 
 ## Step 4. Ask it something
 

@@ -13,8 +13,9 @@ from pathlib import Path
 
 
 def _env(name: str, default: str = "") -> str:
-    v = os.environ.get(name)
-    return default if v is None or v == "" else v
+    # Values are usually pasted into a portal, and a stray space or newline is hard to see there.
+    v = (os.environ.get(name) or "").strip()
+    return v or default
 
 
 def _bool(name: str, default: bool) -> bool:
@@ -40,6 +41,22 @@ def _list(name: str) -> list[str]:
 
 
 DATA_DIR = Path(__file__).parent / "data"
+_GUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+
+
+def is_hosted() -> bool:
+    """Running on a platform rather than a developer's machine."""
+    return any(os.environ.get(k) for k in ("WEBSITE_SITE_NAME", "CONTAINER_APP_NAME", "KUBERNETES_SERVICE_HOST"))
+
+
+def _base_url(raw: str) -> str:
+    """People paste the MCP URL here as often as the site URL."""
+    url = raw.rstrip("/")
+    return url[:-4] if url.endswith("/mcp") else url
+
+
+def _path(raw: str) -> str:
+    return "/" + raw.strip("/")
 
 
 @dataclass
@@ -53,7 +70,9 @@ class Settings:
     #             secret). Good for scheduled FinOps jobs.
     # none      : local development only. No inbound auth; downstream calls
     #             use the developer's Azure CLI / DefaultAzureCredential.
-    auth_mode: str = field(default_factory=lambda: _env("AUTH_MODE", "none").lower())
+    #             Refused on a hosting platform unless ALLOW_NO_AUTH=true.
+    auth_mode: str = field(default_factory=lambda: _env("AUTH_MODE", "delegated" if is_hosted() else "none").lower())
+    allow_no_auth: bool = field(default_factory=lambda: _bool("ALLOW_NO_AUTH", False))
 
     tenant_id: str = field(default_factory=lambda: _env("TENANT_ID"))
     client_id: str = field(default_factory=lambda: _env("CLIENT_ID"))
@@ -69,7 +88,7 @@ class Settings:
     api_key: str = field(default_factory=lambda: _env("MCP_API_KEY"))
     api_key_header: str = field(default_factory=lambda: _env("MCP_API_KEY_HEADER", "x-api-key").lower())
     extra_audiences: list[str] = field(default_factory=lambda: _list("ACCEPTED_AUDIENCES"))
-    public_base_url: str = field(default_factory=lambda: _env("PUBLIC_BASE_URL").rstrip("/"))
+    public_base_url: str = field(default_factory=lambda: _base_url(_env("PUBLIC_BASE_URL")))
 
     # --- safety -----------------------------------------------------------
     read_only: bool = field(default_factory=lambda: _bool("READ_ONLY", False))
@@ -78,6 +97,8 @@ class Settings:
     require_confirm_for_writes: bool = field(default_factory=lambda: _bool("REQUIRE_CONFIRM_FOR_WRITES", True))
     max_response_chars: int = field(default_factory=lambda: _int("MAX_RESPONSE_CHARS", 60000))
     audit_log_size: int = field(default_factory=lambda: _int("AUDIT_LOG_SIZE", 500))
+    # Somewhere that survives a restart. /home is App Service's persistent share. Empty means memory only.
+    state_dir: str = field(default_factory=lambda: _env("STATE_DIR", "/home/data/megamcp" if os.environ.get("WEBSITE_SITE_NAME") else ""))
 
     # --- catalog (self-updating) ------------------------------------------
     catalog_path: str = field(default_factory=lambda: _env("CATALOG_PATH", str(DATA_DIR / "catalog.json.gz")))
@@ -107,9 +128,14 @@ class Settings:
     default_dataverse_url: str = field(default_factory=lambda: _env("DEFAULT_DATAVERSE_URL").rstrip("/"))
     powerplatform_api_version: str = field(default_factory=lambda: _env("POWERPLATFORM_API_VERSION", "2024-10-01"))
     log_level: str = field(default_factory=lambda: _env("LOG_LEVEL", "INFO").upper())
-    host: str = field(default_factory=lambda: _env("HOST", "0.0.0.0"))
+    # With no sign-in in front of it, a server on a developer's machine listens to that machine only.
+    host: str = field(default_factory=lambda: _env("HOST", "0.0.0.0" if is_hosted() or _env("AUTH_MODE") not in ("", "none") else "127.0.0.1"))
     port: int = field(default_factory=lambda: _int("PORT", 8000))
-    mcp_path: str = field(default_factory=lambda: _env("MCP_PATH", "/mcp"))
+    mcp_path: str = field(default_factory=lambda: _path(_env("MCP_PATH", "/mcp")))
+
+    @property
+    def no_auth_refused(self) -> bool:
+        return self.auth_mode == "none" and is_hosted() and not self.allow_no_auth
 
     @property
     def authority(self) -> str:
@@ -130,13 +156,24 @@ class Settings:
         problems: list[str] = []
         if self.auth_mode not in ("delegated", "apikey", "none"):
             problems.append(f"AUTH_MODE must be delegated, apikey or none (got {self.auth_mode!r})")
+        if self.no_auth_refused:
+            problems.append("AUTH_MODE=none has no sign-in, so this server refuses every call while it is on a hosting platform. "
+                            "Set AUTH_MODE=delegated, or ALLOW_NO_AUTH=true if something else in front of it does the sign-in.")
         if self.auth_mode == "delegated":
             if not self.tenant_id:
                 problems.append("TENANT_ID is required in delegated mode")
+            elif not _GUID.match(self.tenant_id):
+                problems.append(f"TENANT_ID must be the tenant's GUID, not a name (got {self.tenant_id!r}). It is on the Entra admin centre overview page.")
             if not self.client_id:
                 problems.append("CLIENT_ID is required in delegated mode")
+            elif not _GUID.match(self.client_id):
+                problems.append(f"CLIENT_ID must be the app registration's Application (client) ID, a GUID (got {self.client_id!r}).")
             if not (self.client_secret or self.client_certificate_path or self.use_managed_identity_fic):
-                problems.append("delegated mode needs CLIENT_SECRET, CLIENT_CERTIFICATE_PATH or USE_MANAGED_IDENTITY_FIC=true")
+                problems.append("delegated mode needs USE_MANAGED_IDENTITY_FIC=true (recommended, see scripts/use-managed-identity.ps1), CLIENT_SECRET or CLIENT_CERTIFICATE_PATH")
+            if self.use_managed_identity_fic and not any(os.environ.get(k) for k in ("IDENTITY_ENDPOINT", "MSI_ENDPOINT", "AZURE_FEDERATED_TOKEN_FILE")):
+                problems.append("USE_MANAGED_IDENTITY_FIC=true but this host has no managed identity. Turn on the system-assigned identity, or run scripts/use-managed-identity.ps1.")
+            if self.client_secret and not self.use_managed_identity_fic and not self.client_certificate_path and _GUID.match(self.client_secret):
+                problems.append("CLIENT_SECRET looks like the secret's ID. Entra shows two columns: paste the Value, which is only shown when the secret is created.")
         if self.auth_mode == "apikey":
             if not self.api_key:
                 problems.append("MCP_API_KEY is required in apikey mode")

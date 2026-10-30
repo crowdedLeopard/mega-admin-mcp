@@ -29,6 +29,7 @@ from typing import Any
 
 import httpx
 
+from .. import __version__
 from ..config import settings
 
 log = logging.getLogger("megamcp.catalog")
@@ -164,8 +165,14 @@ class CatalogStore:
             log.warning("No bundled catalog at %s. Run scripts/build_catalog.py. Starting with curated-only catalog.", p)
             self._load_curated_only()
             return
-        with gzip.open(longpath(p), "rt", encoding="utf-8") as f:
-            data = json.load(f)
+        try:
+            with gzip.open(longpath(p), "rt", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, EOFError, ValueError) as e:
+            # A damaged file must not stop the server: the tools still work without it and the next refresh replaces it.
+            log.error("Bundled catalog %s is unreadable (%s). Starting with curated-only catalog until the next refresh.", p, e)
+            self._load_curated_only()
+            return
         # curated operations live beside the catalog; merge them if the build missed them
         curated = self._read_curated(p.parent / "curated")
         have = {o["id"] for o in data.get("operations", [])}
@@ -444,7 +451,20 @@ class CatalogStore:
             "last_refresh_attempt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.last_refresh_attempt)) if self.last_refresh_attempt else None,
             "last_refresh_result": self.last_refresh_result,
             "warnings": self.meta.get("warnings", []),
+            "latest_server_version": self.meta.get("server_version", ""),
         }
+
+    def update_available(self) -> str:
+        """The newer server version the daily catalog says exists, or empty. The catalog only updates operations, not code."""
+        latest = str(self.meta.get("server_version", ""))
+
+        def parts(v: str) -> tuple[int, ...]:
+            try:
+                return tuple(int(x) for x in v.split("."))
+            except ValueError:
+                return ()
+
+        return latest if parts(latest) > parts(__version__) else ""
 
     def changes(self, days: int = 7, service: str = "") -> dict[str, Any]:
         entries = self.changelog.get("entries", []) if isinstance(self.changelog, dict) else []

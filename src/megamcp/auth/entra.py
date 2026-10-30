@@ -17,6 +17,7 @@ from typing import Any
 
 import jwt
 from jwt import PyJWKClient
+from jwt.exceptions import PyJWKClientConnectionError
 
 from ..config import settings
 
@@ -24,10 +25,13 @@ log = logging.getLogger("megamcp.auth")
 
 
 class AuthError(Exception):
-    def __init__(self, message: str, status: int = 401, detail: dict | None = None):
+    def __init__(self, message: str, status: int = 401, detail: dict | None = None, kind: str = "rejected", fix: str = "", seen: str = ""):
         super().__init__(message)
         self.status = status
         self.detail = detail or {}
+        self.kind = kind  # one row in the connection log per kind
+        self.fix = fix  # what the person setting this up should change
+        self.seen = seen  # the unverified value that gave it away, for the setup page
 
 
 @dataclass
@@ -106,18 +110,23 @@ def _expected_issuers(tid: str) -> set[str]:
 
 def validate_bearer(token: str) -> Principal:
     """Validate an Entra access token issued for this API and return the principal."""
+    # Never fall through to "any Microsoft token will do": with no tenant or client id there is nothing to check the token against.
+    if not settings.tenant_id or not settings.client_id:
+        raise AuthError("This server is not configured yet: TENANT_ID and CLIENT_ID are required.", status=503, kind="not_configured",
+                        fix="Set TENANT_ID and CLIENT_ID on the host, or run scripts/install.ps1.")
     if not token:
-        raise AuthError("Missing bearer token")
+        raise AuthError("Missing bearer token", kind="no_token",
+                        fix="In the Copilot Studio wizard choose OAuth 2.0, then Manual, and create a connection. Isolated hits here with no accepted requests can just be internet scanners.")
     try:
         unverified = jwt.decode(token, options={"verify_signature": False, "verify_exp": False})
     except jwt.PyJWTError as e:
-        raise AuthError(f"Token is not a valid JWT: {e}") from e
+        raise AuthError(f"Token is not a valid JWT: {e}", kind="not_a_jwt",
+                        fix="The caller sent something that is not an Entra access token. Check Authentication is OAuth 2.0 Manual with this server's values.") from e
 
     tid = unverified.get("tid") or settings.tenant_id
-    if settings.tenant_id and tid != settings.tenant_id:
-        raise AuthError("Token was issued by another tenant", detail={"token_tid": tid, "expected": settings.tenant_id})
-    if not tid:
-        raise AuthError("Token has no tid claim and TENANT_ID is not configured")
+    if tid != settings.tenant_id:
+        raise AuthError("Token was issued by another tenant", detail={"token_tid": tid, "expected": settings.tenant_id}, kind="wrong_tenant",
+                        fix=f"Sign in with an account from tenant {settings.tenant_id}, and check the Authorization and Token URLs in the wizard contain that tenant id.", seen=str(tid))
 
     try:
         signing_key = _jwks.client(tid).get_signing_key_from_jwt(token)
@@ -129,19 +138,27 @@ def validate_bearer(token: str) -> Principal:
             options={"verify_aud": bool(settings.accepted_audiences), "require": ["exp", "iat"]},
             leeway=60,
         )
+    except PyJWKClientConnectionError as e:
+        # Our problem, not the caller's: a 401 here would send Copilot Studio round a sign-in loop that cannot help.
+        raise AuthError("The server cannot reach Microsoft to check the token's signature", status=503, kind="signing_keys_unreachable",
+                        fix="Allow outbound HTTPS from this host to login.microsoftonline.com.") from e
     except jwt.ExpiredSignatureError as e:
-        raise AuthError("Token has expired", detail={"error": "token_expired"}) from e
+        raise AuthError("Token has expired", detail={"error": "token_expired"}, kind="token_expired",
+                        fix=f"Isolated hits are normal. If it keeps happening the connection has no refresh token: Scopes must be '{settings.client_id}/.default offline_access'; then reconnect.") from e
     except jwt.InvalidAudienceError as e:
         raise AuthError(
             "Token audience is not this API. In Copilot Studio set Scopes to '<client-id>/.default offline_access' (GUID form)",
-            detail={"aud": unverified.get("aud"), "accepted": settings.accepted_audiences},
+            detail={"aud": unverified.get("aud"), "accepted": settings.accepted_audiences}, kind="wrong_audience",
+            fix=f"The token was issued for another API. Set Scopes in the wizard to '{settings.client_id}/.default offline_access', then create a new connection.",
+            seen=str(unverified.get("aud")),
         ) from e
     except jwt.PyJWTError as e:
-        raise AuthError(f"Token validation failed: {e}") from e
+        raise AuthError(f"Token validation failed: {e}", kind="invalid_token",
+                        fix="The token's signature or claims did not check out. Create a new connection; if that fails, check the wizard values against this page.") from e
 
     iss = claims.get("iss", "")
     if iss not in _expected_issuers(tid):
-        raise AuthError("Unexpected token issuer", detail={"iss": iss})
+        raise AuthError("Unexpected token issuer", detail={"iss": iss}, kind="wrong_issuer", fix="Check the Authorization and Token URLs in the wizard.", seen=str(iss))
 
     scopes = (claims.get("scp") or "").split() if isinstance(claims.get("scp"), str) else list(claims.get("scp") or [])
     return Principal(
@@ -162,21 +179,27 @@ def principal_from_request_headers(headers: dict[str, str]) -> Principal:
     """Apply the configured AUTH_MODE to the inbound headers."""
     mode = settings.auth_mode
     h = {k.lower(): v for k, v in headers.items()}
+    if settings.no_auth_refused:
+        raise AuthError("AUTH_MODE=none is refused on a hosting platform: this server would be open to the internet.", status=503, kind="no_auth_refused",
+                        fix="Set AUTH_MODE=delegated, or ALLOW_NO_AUTH=true if something else in front of it does the sign-in.")
     if mode == "none":
         return Principal(mode="none", name="local developer", oid="local", tid=settings.tenant_id)
     if mode == "apikey":
+        if not settings.api_key:
+            raise AuthError("This server is not configured yet: MCP_API_KEY is required in apikey mode.", status=503, kind="not_configured", fix="Set MCP_API_KEY on the host.")
         provided = h.get(settings.api_key_header, "")
         if not provided:
             auth = h.get("authorization", "")
             if auth.lower().startswith("bearer "):
                 provided = auth[7:].strip()
         if not provided or not _constant_time_eq(provided, settings.api_key):
-            raise AuthError(f"Missing or invalid API key (header {settings.api_key_header})")
+            raise AuthError(f"Missing or invalid API key (header {settings.api_key_header})", kind="bad_api_key",
+                            fix=f"Send the key in the {settings.api_key_header} header.")
         return Principal(mode="apikey", name="api-key caller", oid="apikey", tid=settings.tenant_id, app_id=settings.client_id)
     # delegated
     auth = h.get("authorization", "")
     if not auth.lower().startswith("bearer "):
-        raise AuthError("Authorization: Bearer <token> is required")
+        return validate_bearer("")
     return validate_bearer(auth[7:].strip())
 
 

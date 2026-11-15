@@ -1,5 +1,5 @@
 {
-  "generated": "2026-11-14T11:35:27Z",
+  "generated": "2026-11-15T12:00:55Z",
   "builder_version": "1.0.0",
   "sources": {
     "graph": {
@@ -33,8 +33,8 @@
     "retailprices": 1
   },
   "warnings": [],
-  "added": 18,
-  "removed": 2,
-  "duration_seconds": 84,
-  "previous_generated": "2026-11-13T12:19:59Z"
+  "added": 0,
+  "removed": 0,
+  "duration_seconds": 90,
+  "previous_generated": "2026-11-14T11:35:27Z"
 }

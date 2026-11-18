@@ -1,29 +1,29 @@
 {
-  "generated": "2026-11-17T13:34:19Z",
+  "generated": "2026-11-18T13:10:14Z",
   "builder_version": "1.0.0",
   "sources": {
     "graph": {
       "operations": 48014
     },
     "azure": {
-      "operations": 6166
+      "operations": 6250
     },
     "powerplatform": {
       "operations": 220,
       "sdk": "powerplatform-management 2.0.3578.333"
     },
     "fabric": {
-      "operations": 610
+      "operations": 620
     },
     "curated": {
       "operations": 79
     }
   },
   "by_service": {
-    "arm": 6166,
+    "arm": 6250,
     "bap": 10,
     "dataverse": 35,
-    "fabric": 610,
+    "fabric": 620,
     "flow": 7,
     "graph": 48014,
     "o365mgmt": 4,
@@ -33,8 +33,8 @@
     "retailprices": 1
   },
   "warnings": [],
-  "added": 0,
-  "removed": 0,
-  "duration_seconds": 93,
-  "previous_generated": "2026-11-16T12:52:09Z"
+  "added": 98,
+  "removed": 4,
+  "duration_seconds": 80,
+  "previous_generated": "2026-11-17T13:34:19Z"
 }
